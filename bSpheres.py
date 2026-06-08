@@ -28,6 +28,7 @@ _MODE_SET_MAP = {
     'PAINT_WEIGHT': 'WEIGHT_PAINT',
     'PAINT_VERTEX': 'VERTEX_PAINT',
     'PAINT_TEXTURE': 'TEXTURE_PAINT',
+    'PARTICLE': 'PARTICLE_EDIT',
 }
 
 
@@ -70,12 +71,20 @@ class applyBSphereModifiers(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
  
     def execute(self, context):
-        bpy.ops.object.mode_set(mode='OBJECT')
-        bpy.ops.object.modifier_apply(modifier="Mirror")
-        bpy.ops.object.modifier_apply(modifier="Skin")
-        bpy.ops.object.modifier_apply(modifier="Subdivision")
-        context.space_data.shading.show_xray = False
         obj = context.object
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        # Apply by modifier type, not by the default names ("Mirror"/"Skin"/
+        # "Subdivision"): Blender suffixes duplicates with ".001" if the object
+        # already had a modifier of that type, which would break a name lookup.
+        for mod_type in ('MIRROR', 'SKIN', 'SUBSURF'):
+            mod = next((m for m in obj.modifiers if m.type == mod_type), None)
+            if mod is not None:
+                bpy.ops.object.modifier_apply(modifier=mod.name)
+
+        space = context.space_data
+        if space and space.type == 'VIEW_3D':
+            space.shading.show_xray = False
         previous_mode = context.scene.get('previous_mode', 'OBJECT')
         bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
         obj.data.remesh_voxel_size = 0.01
