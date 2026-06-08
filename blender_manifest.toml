@@ -1,0 +1,17 @@
+schema_version = "1.0.0"
+
+id = "bspheres"
+version = "1.1.0"
+name = "bSpheres"
+tagline = "zSpheres-style base mesh creation"
+maintainer = "Abinadi Cordova"
+
+type = "add-on"
+
+blender_version_min = "4.2.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+tags = ["Mesh", "Modeling"]
