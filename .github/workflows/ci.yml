@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['**']   # tag pushes are handled by the release workflow
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  BLENDER_VERSION: "4.2.3"   # keep in sync with release.yml
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Byte-compile Python (fast fail on syntax errors)
+        run: python -m compileall -q __init__.py bSpheres.py
+
+      - name: Install Blender runtime libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxxf86vm1 libxfixes3 libxi6 libxkbcommon0 libxrender1 \
+            libxext6 libsm6 libgl1
+
+      - name: Download Blender
+        run: |
+          base="blender-${BLENDER_VERSION}-linux-x64"
+          series="Blender${BLENDER_VERSION%.*}"
+          wget -q "https://download.blender.org/release/${series}/${base}.tar.xz"
+          tar -xf "${base}.tar.xz"
+          echo "$PWD/${base}" >> "$GITHUB_PATH"
+
+      - name: Validate extension manifest
+        run: blender --command extension validate .
