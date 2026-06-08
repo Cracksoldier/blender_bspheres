@@ -36,5 +36,5 @@ The three registered classes and how they fit together:
 ### Cross-file coupling to watch
 
 - **Mode round-trip via scene custom prop.** `AddBMesh.execute` stashes `context.mode` into `context.scene['previous_mode']` (a custom ID-property on the active scene), and `applyBSphereModifiers.execute` reads it back to restore the mode after baking. Because `context.mode` returns values like `EDIT_MESH` that `mode_set()` rejects, the `_MODE_SET_MAP` table at the top of `bSpheres.py` normalizes them on restore. Any change to one operator's mode handling must keep the other (and the map) in sync.
-- **Modifier names are load-bearing.** Both operators and the panel reference modifiers by the names Blender auto-assigns (`"Mirror"`, `"Skin"`, `"Subdivision"`). The panel matches on `modifier.type` (more robust), but `applyBSphereModifiers` matches on name string.
+- **Modifier matching.** The panel and `applyBSphereModifiers` both locate modifiers by `modifier.type` (`MIRROR`/`SKIN`/`SUBSURF`), so a `.001` name suffix doesn't break them. `AddBMesh` still sets up the freshly-created stack by the default names `"Skin"`/`"Subdivision"` — safe there because the object is brand new.
 - The `width`/`height`/`depth` props on `AddBMesh` size the throwaway box before it is merged to a point, so they have no visible effect on the final single-vertex result.
