@@ -1,0 +1,70 @@
+name: Release extension
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version X.Y.Z (sets manifest version, tag v<version>, and release)"
+        required: true
+        type: string
+
+permissions:
+  contents: write   # commit the version bump, push the tag, create the release
+
+env:
+  BLENDER_VERSION: "4.2.3"   # 4.2 LTS; bump as desired
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate version input
+        run: |
+          echo "${{ inputs.version }}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::version must be X.Y.Z"; exit 1; }
+
+      - name: Bump manifest version
+        run: |
+          sed -i -E 's/^version = ".*"/version = "${{ inputs.version }}"/' blender_manifest.toml
+          grep -E '^version =' blender_manifest.toml
+
+      - name: Install Blender runtime libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxxf86vm1 libxfixes3 libxi6 libxkbcommon0 libxrender1 \
+            libxext6 libsm6 libgl1
+
+      - name: Download Blender
+        run: |
+          base="blender-${BLENDER_VERSION}-linux-x64"
+          series="Blender${BLENDER_VERSION%.*}"
+          wget -q "https://download.blender.org/release/${series}/${base}.tar.xz"
+          tar -xf "${base}.tar.xz"
+          echo "$PWD/${base}" >> "$GITHUB_PATH"
+
+      - name: Validate & build extension
+        run: |
+          blender --command extension validate .
+          blender --command extension build \
+            --source-dir . --output-filepath "bspheres-${{ inputs.version }}.zip"
+
+      - name: Commit bump, tag, push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add blender_manifest.toml
+          git commit -m "Release v${{ inputs.version }}"
+          git tag "v${{ inputs.version }}"
+          git push origin "HEAD:${{ github.ref_name }}"
+          git push origin "v${{ inputs.version }}"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ inputs.version }}"
+          name: "bSpheres v${{ inputs.version }}"
+          files: "bspheres-${{ inputs.version }}.zip"
+          fail_on_unmatched_files: true
