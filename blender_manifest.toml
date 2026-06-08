@@ -15,3 +15,14 @@ license = [
 ]
 
 tags = ["Mesh", "Modeling"]
+
+[build]
+# Replaces Blender's defaults, so the default excludes are re-listed here.
+paths_exclude_pattern = [
+  "__pycache__/",
+  "/.git/",
+  "/.github/",
+  "/.claude/",
+  "/CLAUDE.md",
+  "*.zip",
+]
