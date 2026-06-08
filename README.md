@@ -1,5 +1,7 @@
 # bSpheres
 
+> **Fork notice:** This is a fork of [PapaTemporal/blender_bspheres](https://github.com/PapaTemporal/blender_bspheres), updated for Blender 4.2 LTS and newer.
+
 Simulate zBrush-style **zSpheres** in Blender for fast base-mesh creation.
 
 zBrush has a handy tool called zSpheres for blocking out quick base meshes. Blender
