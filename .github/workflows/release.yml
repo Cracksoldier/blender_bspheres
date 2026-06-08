@@ -41,9 +41,9 @@ jobs:
         run: |
           base="blender-${BLENDER_VERSION}-linux-x64"
           series="Blender${BLENDER_VERSION%.*}"
-          wget -q "https://download.blender.org/release/${series}/${base}.tar.xz"
-          tar -xf "${base}.tar.xz"
-          echo "$PWD/${base}" >> "$GITHUB_PATH"
+          wget -q -P /tmp "https://download.blender.org/release/${series}/${base}.tar.xz"
+          tar -xf "/tmp/${base}.tar.xz" -C /tmp
+          echo "/tmp/${base}" >> "$GITHUB_PATH"
 
       - name: Validate & build extension
         run: |
