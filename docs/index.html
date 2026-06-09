@@ -160,7 +160,8 @@
         <div class="feat"><h3>Mark Root</h3><p>Set the selected vertex as the skin root — handy when building bones from the vertices.</p></div>
         <div class="feat"><h3>Mark / Clear Loose</h3><p>Make vertices act like a grab brush, pulling the skin toward them instead of centering it.</p></div>
         <div class="feat"><h3>Viewport</h3><p>How much to subdivide the skin. Higher = smoother preview.</p></div>
-        <div class="feat"><h3>bSkin Settings</h3><p>Per-object output controls: voxel remesh toggle, voxel size, and shade-smooth toggle. Applied by Make bSkin, Preview, and Apply.</p></div>
+        <div class="feat"><h3>bSkin Settings</h3><p>Per-object output controls: voxel remesh toggle + size, shade-smooth, merge doubles + threshold, recalculate normals, and thin-branch warning + min radius. Applied by Make bSkin, Preview, and Apply.</p></div>
+        <div class="feat"><h3>Selected Node</h3><p>Edit Mode only. Shows the active vertex's live skin radius and root/loose flags. Use <strong>Mark Preserve</strong> / <strong>Clear Preserve</strong> to add or remove the vertex from the <code>bspheres_preserve</code> group (exempt from the thin-branch warning).</p></div>
         <div class="feat"><h3>Preview / Refresh</h3><p>On-demand preview in a <code>bSpheres_Preview</code> collection. Re-clicking updates the same object in-place. Use Delete to remove it.</p></div>
         <div class="feat"><h3>Make bSkin</h3><p>Non-destructive permanent bake. Creates a new mesh in <code>bSpheres_Output</code> without touching the control structure — iterate as many times as you like.</p></div>
         <div class="feat"><h3>Apply</h3><p>Destructive bake. Applies the three modifiers onto the control object, then post-processes using the same bSkin Settings. Use when done iterating.</p></div>
