@@ -45,9 +45,14 @@ jobs:
             --source-dir . \
             --output-filepath "bspheres-dev-${{ env.SHORT_SHA }}.zip"
 
+      - name: Unpack for artifact upload
+        run: |
+          mkdir dist
+          cd dist && unzip "../bspheres-dev-${{ env.SHORT_SHA }}.zip"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: "bspheres-dev-${{ env.SHORT_SHA }}"
-          path: "bspheres-dev-${{ env.SHORT_SHA }}.zip"
+          path: "dist/"
           retention-days: 14
