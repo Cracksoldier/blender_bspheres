@@ -11,7 +11,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-import re
 import bpy
 import bmesh
 from bpy_extras.object_utils import AddObjectHelper
@@ -208,23 +207,22 @@ class MakeBSkin(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         obj = context.active_object
-        return (
-            obj is not None
-            and obj.type == 'MESH'
-            and any(m.type == 'SKIN' for m in obj.modifiers)
-        )
+        if obj is None or obj.type != 'MESH':
+            return False
+        mod_types = {m.type for m in obj.modifiers}
+        return {'MIRROR', 'SKIN', 'SUBSURF'}.issubset(mod_types)
 
     def execute(self, context):
         source_obj = context.active_object
+        previous_mode = context.mode
         bpy.ops.object.mode_set(mode='OBJECT')
 
         depsgraph = context.evaluated_depsgraph_get()
         evaluated_obj = source_obj.evaluated_get(depsgraph)
         mesh = bpy.data.meshes.new_from_object(evaluated_obj, depsgraph=depsgraph)
 
-        output_name = re.sub(r'(?i)^bSphere', 'bSkin', source_obj.name)
-        if output_name == source_obj.name:
-            output_name = 'bSkin'
+        name = source_obj.name
+        output_name = ('bSkin' + name[7:]) if name.startswith('bSphere') else 'bSkin'
 
         new_obj = bpy.data.objects.new(output_name, mesh)
         new_obj.matrix_world = source_obj.matrix_world.copy()
@@ -232,9 +230,11 @@ class MakeBSkin(bpy.types.Operator):
         col = bpy.data.collections.get("bSpheres_Output")
         if col is None:
             col = bpy.data.collections.new("bSpheres_Output")
+        if col.name not in {c.name for c in context.scene.collection.children}:
             context.scene.collection.children.link(col)
         col.objects.link(new_obj)
 
+        bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
         return {"FINISHED"}
 
 
