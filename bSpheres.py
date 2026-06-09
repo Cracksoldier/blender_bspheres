@@ -85,14 +85,15 @@ class applyBSphereModifiers(bpy.types.Operator):
         space = context.space_data
         if space and space.type == 'VIEW_3D':
             space.shading.show_xray = False
-        previous_mode = context.scene.get('previous_mode', 'OBJECT')
-        bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
         settings = obj.bspheres_skin_settings
-        obj.data.remesh_voxel_size = settings.voxel_size
-        bpy.ops.object.voxel_remesh()
+        if settings.use_voxel_remesh:
+            obj.data.remesh_voxel_size = settings.voxel_size
+            bpy.ops.object.voxel_remesh()
         if settings.use_smooth_shading:
             for poly in obj.data.polygons:
                 poly.use_smooth = True
+        previous_mode = context.scene.get('previous_mode', 'OBJECT')
+        bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
         return {"FINISHED"}
     
 from bpy.props import (
@@ -219,15 +220,18 @@ def _ensure_collection(name, scene):
 
 
 def _apply_bskin_settings(obj, settings, context):
+    if settings.use_voxel_remesh:
+        prev_active = context.view_layer.objects.active
+        prev_selected = obj.select_get()
+        context.view_layer.objects.active = obj
+        obj.select_set(True)
+        obj.data.remesh_voxel_size = settings.voxel_size
+        bpy.ops.object.voxel_remesh()
+        obj.select_set(prev_selected)
+        context.view_layer.objects.active = prev_active
     if settings.use_smooth_shading:
         for poly in obj.data.polygons:
             poly.use_smooth = True
-    if settings.use_voxel_remesh:
-        prev_active = context.view_layer.objects.active
-        context.view_layer.objects.active = obj
-        obj.data.remesh_voxel_size = settings.voxel_size
-        bpy.ops.object.voxel_remesh()
-        context.view_layer.objects.active = prev_active
 
 
 def _find_preview_obj(source_name):
@@ -391,18 +395,19 @@ class BSpheresPanel(bpy.types.Panel):
                         sub = col.column()
                         sub.operator("object.skin_root_mark", text="Mark Root")
             
-                settings = obj.bspheres_skin_settings
-                layout.label(text="bSkin Settings:")
-                box = layout.column(align=True)
-                row = box.row(align=True)
-                row.prop(settings, "use_voxel_remesh", text="Remesh")
-                row.prop(settings, "voxel_size", text="Size")
-                box.prop(settings, "use_smooth_shading", text="Shade Smooth")
+                if _is_bsphere_control(obj):
+                    settings = obj.bspheres_skin_settings
+                    layout.label(text="bSkin Settings:")
+                    box = layout.column(align=True)
+                    row = box.row(align=True)
+                    row.prop(settings, "use_voxel_remesh", text="Remesh")
+                    row.prop(settings, "voxel_size", text="Size")
+                    box.prop(settings, "use_smooth_shading", text="Shade Smooth")
 
-                layout.label(text="Preview:")
-                row = layout.row(align=True)
-                row.operator("bspheres.preview_bskin", text="Preview / Refresh")
-                row.operator("bspheres.delete_bskin_preview", text="Delete")
+                    layout.label(text="Preview:")
+                    row = layout.row(align=True)
+                    row.operator("bspheres.preview_bskin", text="Preview / Refresh")
+                    row.operator("bspheres.delete_bskin_preview", text="Delete")
 
                 split = layout.split()
                 col = split.column()
