@@ -19,12 +19,14 @@ from . bSpheres import *
 def register():
     bpy.utils.register_class(AddBMesh)
     bpy.utils.register_class(applyBSphereModifiers)
+    bpy.utils.register_class(MakeBSkin)
     bpy.utils.register_class(BSpheresPanel)
 
 def unregister():
-    bpy.utils.unregister_class(AddBMesh)
-    bpy.utils.unregister_class(applyBSphereModifiers)
     bpy.utils.unregister_class(BSpheresPanel)
+    bpy.utils.unregister_class(MakeBSkin)
+    bpy.utils.unregister_class(applyBSphereModifiers)
+    bpy.utils.unregister_class(AddBMesh)
 
 if __name__ == '__main__':
     register()
