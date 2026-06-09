@@ -11,6 +11,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
+import re
 import bpy
 import bmesh
 from bpy_extras.object_utils import AddObjectHelper
@@ -198,6 +199,45 @@ class AddBMesh(bpy.types.Operator):
         return {'FINISHED'}
  
  
+class MakeBSkin(bpy.types.Operator):
+    """Create a new sculptable mesh from the bSphere control object without modifying it"""
+    bl_idname = 'bspheres.make_bskin'
+    bl_label = 'Make bSkin'
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return (
+            obj is not None
+            and obj.type == 'MESH'
+            and any(m.type == 'SKIN' for m in obj.modifiers)
+        )
+
+    def execute(self, context):
+        source_obj = context.active_object
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        depsgraph = context.evaluated_depsgraph_get()
+        evaluated_obj = source_obj.evaluated_get(depsgraph)
+        mesh = bpy.data.meshes.new_from_object(evaluated_obj, depsgraph=depsgraph)
+
+        output_name = re.sub(r'(?i)^bSphere', 'bSkin', source_obj.name)
+        if output_name == source_obj.name:
+            output_name = 'bSkin'
+
+        new_obj = bpy.data.objects.new(output_name, mesh)
+        new_obj.matrix_world = source_obj.matrix_world.copy()
+
+        col = bpy.data.collections.get("bSpheres_Output")
+        if col is None:
+            col = bpy.data.collections.new("bSpheres_Output")
+            context.scene.collection.children.link(col)
+        col.objects.link(new_obj)
+
+        return {"FINISHED"}
+
+
 class BSpheresPanel(bpy.types.Panel):
     bl_idname = 'OBJECT_PT_bSpheres_Panel'
     bl_label = 'bSpheres'
@@ -244,6 +284,7 @@ class BSpheresPanel(bpy.types.Panel):
                 col = split.column()
                 col.label(text="Convert to Sculptable Mesh")
                 sub = col.column(align=True)
+                sub.operator("bspheres.make_bskin", text="Make bSkin")
                 sub.operator("tcg.apply_bsphere_modifiers", text="Apply")
                 layout.label(text="Extrude Vert: E")
                 layout.label(text="Scale Vert: Ctrl-A")
