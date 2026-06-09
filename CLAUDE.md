@@ -19,7 +19,7 @@ There is no CLI or test harness — the addon only runs inside Blender. It is an
 - **Install:** Blender *Preferences → Get Extensions → Install from Disk*, select the zip, enable it. The panel appears in the 3D Viewport N-panel under the **bSpheres** tab.
 - **Iterate:** edit the `.py` files and toggle the extension off/on (or use *Reload Scripts*). Because it loads as a package, the relative import `from . bSpheres import *` in `__init__.py` resolves normally.
 
-Validate changes by exercising the full flow manually in Blender: **Create** → extrude/scale/move verts → adjust Mirror axes & Subdivision level → **Apply**. There is no automated coverage to rely on.
+Validate changes by exercising the full flow manually in Blender: **Create** → extrude/scale/move verts → adjust Mirror axes & Subdivision level → **Make bSkin** (non-destructive) or **Apply** (destructive). There is no automated coverage to rely on.
 
 ## CI / release
 
@@ -37,17 +37,19 @@ Validate changes by exercising the full flow manually in Blender: **Create** →
 Two Python files plus the extension manifest:
 
 - **`blender_manifest.toml`** — extension metadata (id, version, `blender_version_min`, license, tags). This is the source of truth for what used to be `bl_info`.
-- **`__init__.py`** — entry point: `register()`/`unregister()` register the three classes from `bSpheres.py`. No `bl_info` (the manifest replaces it).
-- **`bSpheres.py`** — all behavior: two operators and one panel.
+- **`__init__.py`** — entry point: `register()`/`unregister()` register the four classes from `bSpheres.py`. No `bl_info` (the manifest replaces it).
+- **`bSpheres.py`** — all behavior: three operators and one panel.
 
-The three registered classes and how they fit together:
+The four registered classes and how they fit together:
 
 - **`AddBMesh`** (`mesh.primitive_bsphere_add`, "Create" button) — builds an 8-vertex box via `add_box()`, merges all verts to center to get a single vertex, then stacks three modifiers (**Mirror**, **Skin**, **Subdivision**), enters Edit mode with x-ray on, and marks the skin root. This single-vertex-plus-skin setup *is* the "zSphere" the user then extrudes.
-- **`applyBSphereModifiers`** (`tcg.apply_bsphere_modifiers`, "Apply" button) — bakes the three modifiers into mesh data, turns off x-ray, then voxel-remeshes at `remesh_voxel_size = 0.01` so overlapping skin volumes fuse into one watertight, sculptable mesh.
+- **`MakeBSkin`** (`bspheres.make_bskin`, "Make bSkin" button) — non-destructive bake. Evaluates the modifier stack via the depsgraph (`new_from_object`), creates a new plain mesh object in a `bSpheres_Output` collection, and returns the user to their previous mode. The control object is left completely untouched, so the workflow can iterate: sketch → bake → keep sketching → bake again.
+- **`applyBSphereModifiers`** (`tcg.apply_bsphere_modifiers`, "Apply" button) — **destructive** bake. Applies the three modifiers directly onto the control object, then voxel-remeshes at `remesh_voxel_size = 0.01` so overlapping skin volumes fuse into one watertight, sculptable mesh. Use this when you are done iterating.
 - **`BSpheresPanel`** (`OBJECT_PT_bSpheres_Panel`) — the UI. It does **not** own most controls; instead it introspects `context.object.modifiers` and surfaces the live Mirror axes, Subdivision `levels`, and Skin loose/root marking by binding directly to the built-in Blender operators (`object.skin_root_mark`, `object.skin_loose_mark_clear`) and modifier properties. The panel's contents therefore depend entirely on the modifier stack `AddBMesh` created.
 
 ### Cross-file coupling to watch
 
-- **Mode round-trip via scene custom prop.** `AddBMesh.execute` stashes `context.mode` into `context.scene['previous_mode']` (a custom ID-property on the active scene), and `applyBSphereModifiers.execute` reads it back to restore the mode after baking. Because `context.mode` returns values like `EDIT_MESH` that `mode_set()` rejects, the `_MODE_SET_MAP` table at the top of `bSpheres.py` normalizes them on restore. Any change to one operator's mode handling must keep the other (and the map) in sync.
-- **Modifier matching.** The panel and `applyBSphereModifiers` both locate modifiers by `modifier.type` (`MIRROR`/`SKIN`/`SUBSURF`), so a `.001` name suffix doesn't break them. `AddBMesh` still sets up the freshly-created stack by the default names `"Skin"`/`"Subdivision"` — safe there because the object is brand new.
+- **Mode round-trip.** `AddBMesh.execute` stashes `context.mode` into `context.scene['previous_mode']` (a custom ID-property), and `applyBSphereModifiers.execute` reads it back to restore mode after baking. `MakeBSkin.execute` captures `context.mode` locally (not via the scene prop) and restores it at the end the same way. Because `context.mode` returns values like `EDIT_MESH` that `mode_set()` rejects, the `_MODE_SET_MAP` table at the top of `bSpheres.py` normalizes them on restore. Any change to one operator's mode handling must keep the others (and the map) in sync.
+- **Modifier matching.** The panel, `applyBSphereModifiers`, and `MakeBSkin.poll` all locate modifiers by `modifier.type` (`MIRROR`/`SKIN`/`SUBSURF`), so a `.001` name suffix doesn't break them. `MakeBSkin.poll` requires all three types to be present, which is what `AddBMesh` always creates — this prevents the button from lighting up on arbitrary meshes with an unrelated Skin modifier.
+- **Output collection.** `MakeBSkin` places output in a `bSpheres_Output` collection, creating it if needed and ensuring it is linked to the current scene (guarded by checking `context.scene.collection.children` so a multi-scene blend file doesn't silently send output to the wrong scene).
 - The `width`/`height`/`depth` props on `AddBMesh` size the throwaway box before it is merged to a point, so they have no visible effect on the final single-vertex result.

@@ -160,7 +160,8 @@
         <div class="feat"><h3>Mark Root</h3><p>Set the selected vertex as the skin root — handy when building bones from the vertices.</p></div>
         <div class="feat"><h3>Mark / Clear Loose</h3><p>Make vertices act like a grab brush, pulling the skin toward them instead of centering it.</p></div>
         <div class="feat"><h3>Viewport</h3><p>How much to subdivide the skin. Higher = smoother preview.</p></div>
-        <div class="feat"><h3>Apply</h3><p>Applies the three modifiers, then voxel-remeshes at 0.01 so overlapping volumes fuse into one sculptable mesh.</p></div>
+        <div class="feat"><h3>Make bSkin</h3><p>Non-destructive bake. Creates a new mesh in a <code>bSpheres_Output</code> collection without touching the control structure — iterate as many times as you like.</p></div>
+        <div class="feat"><h3>Apply</h3><p>Destructive bake. Applies the three modifiers onto the control object, then voxel-remeshes at 0.01 so overlapping volumes fuse into one sculptable mesh. Use when done iterating.</p></div>
       </div>
     </section>
 
