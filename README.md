@@ -48,15 +48,29 @@ to open it).
    - **Remesh / Size** — toggle voxel remesh on/off and set the voxel size (default
      0.02). Smaller = finer mesh, slower to compute.
    - **Shade Smooth** — automatically set smooth shading on baked output.
-7. **Preview / Refresh** — non-destructive on-demand preview. Creates a temporary mesh
+   - **Merge Doubles / Dist** — merge vertices within the given threshold after baking.
+     Useful for cleaning up seams left by the Skin modifier.
+   - **Recalculate Normals** — run "Recalculate Outside" on the baked mesh to fix
+     flipped normals (off by default; the Skin modifier usually produces consistent
+     normals already).
+   - **Warn Thin Branches / Min Radius** — emit a warning for any vertex whose skin
+     radius falls below the minimum (default 0.01). Vertices in the
+     `bspheres_preserve` group are exempt. The warning fires during **Make bSkin**
+     and **Preview / Refresh**.
+7. **Selected Node** (Edit Mode only) — when a vertex is active, shows its live skin
+   radius and root/loose flags, plus two buttons:
+   - **Mark Preserve** — adds the selected vertex to the `bspheres_preserve` group,
+     exempting it from the thin-branch warning.
+   - **Clear Preserve** — removes the selected vertex from that group.
+8. **Preview / Refresh** — non-destructive on-demand preview. Creates a temporary mesh
    in a `bSpheres_Preview` collection. Re-clicking updates it in-place so the Outliner
    stays clean. Use **Delete** to remove it.
-8. **Make bSkin** — non-destructive permanent bake. Creates a new plain mesh object in a
+9. **Make bSkin** — non-destructive permanent bake. Creates a new plain mesh object in a
    `bSpheres_Output` collection without touching the control structure. Each run produces
    a fresh output object named `bSkin…`.
-9. **Apply** — destructive bake. Applies all three modifiers directly onto the control
-   object, then post-processes using the same bSkin Settings (remesh, smooth). Use this
-   when you are done iterating.
+10. **Apply** — destructive bake. Applies all three modifiers directly onto the control
+    object, then post-processes using the same bSkin Settings (remesh, smooth, cleanup).
+    Use this when you are done iterating.
 
 ### Editing shortcuts
 
