@@ -43,12 +43,20 @@ to open it).
 4. **Mark Loose / Clear Loose** — make vertices behave more like a grab brush, pulling
    the skin toward them instead of centering the skin on the vertex.
 5. **Viewport** — how much to subdivide the skin. Higher = smoother preview.
-6. **Make bSkin** — non-destructive bake. Creates a new plain mesh object in a
-   `bSpheres_Output` collection without touching the control structure, so you can keep
-   iterating. Run it as many times as you like; each run produces a fresh output object.
-7. **Apply** — destructive bake. Applies all three modifiers directly onto the control
-   object, then voxel-remeshes at a voxel size of 0.01 so overlapping skin volumes join
-   into one watertight, sculptable mesh. Use this when you are done iterating.
+6. **bSkin Settings** — per-object output controls (only shown for bSphere control
+   objects):
+   - **Remesh / Size** — toggle voxel remesh on/off and set the voxel size (default
+     0.02). Smaller = finer mesh, slower to compute.
+   - **Shade Smooth** — automatically set smooth shading on baked output.
+7. **Preview / Refresh** — non-destructive on-demand preview. Creates a temporary mesh
+   in a `bSpheres_Preview` collection. Re-clicking updates it in-place so the Outliner
+   stays clean. Use **Delete** to remove it.
+8. **Make bSkin** — non-destructive permanent bake. Creates a new plain mesh object in a
+   `bSpheres_Output` collection without touching the control structure. Each run produces
+   a fresh output object named `bSkin…`.
+9. **Apply** — destructive bake. Applies all three modifiers directly onto the control
+   object, then post-processes using the same bSkin Settings (remesh, smooth). Use this
+   when you are done iterating.
 
 ### Editing shortcuts
 
