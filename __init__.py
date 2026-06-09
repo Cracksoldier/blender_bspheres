@@ -17,16 +17,26 @@ import bpy
 from . bSpheres import *
 
 def register():
+    bpy.utils.register_class(BSpheresSkinSettings)
+    bpy.types.Object.bspheres_skin_settings = bpy.props.PointerProperty(
+        type=BSpheresSkinSettings
+    )
     bpy.utils.register_class(AddBMesh)
     bpy.utils.register_class(applyBSphereModifiers)
     bpy.utils.register_class(MakeBSkin)
+    bpy.utils.register_class(PreviewBSkin)
+    bpy.utils.register_class(DeleteBSkinPreview)
     bpy.utils.register_class(BSpheresPanel)
 
 def unregister():
     bpy.utils.unregister_class(BSpheresPanel)
+    bpy.utils.unregister_class(DeleteBSkinPreview)
+    bpy.utils.unregister_class(PreviewBSkin)
     bpy.utils.unregister_class(MakeBSkin)
     bpy.utils.unregister_class(applyBSphereModifiers)
     bpy.utils.unregister_class(AddBMesh)
+    del bpy.types.Object.bspheres_skin_settings
+    bpy.utils.unregister_class(BSpheresSkinSettings)
 
 if __name__ == '__main__':
     register()
