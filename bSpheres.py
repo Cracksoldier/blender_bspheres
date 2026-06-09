@@ -87,8 +87,12 @@ class applyBSphereModifiers(bpy.types.Operator):
             space.shading.show_xray = False
         previous_mode = context.scene.get('previous_mode', 'OBJECT')
         bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
-        obj.data.remesh_voxel_size = 0.01
+        settings = obj.bspheres_skin_settings
+        obj.data.remesh_voxel_size = settings.voxel_size
         bpy.ops.object.voxel_remesh()
+        if settings.use_smooth_shading:
+            for poly in obj.data.polygons:
+                poly.use_smooth = True
         return {"FINISHED"}
     
 from bpy.props import (
@@ -198,6 +202,44 @@ class AddBMesh(bpy.types.Operator):
         return {'FINISHED'}
  
  
+def _is_bsphere_control(obj):
+    if obj is None or obj.type != 'MESH':
+        return False
+    mod_types = {m.type for m in obj.modifiers}
+    return {'MIRROR', 'SKIN', 'SUBSURF'}.issubset(mod_types)
+
+
+def _ensure_collection(name, scene):
+    col = bpy.data.collections.get(name)
+    if col is None:
+        col = bpy.data.collections.new(name)
+    if col.name not in {c.name for c in scene.collection.children}:
+        scene.collection.children.link(col)
+    return col
+
+
+def _apply_bskin_settings(obj, settings, context):
+    if settings.use_smooth_shading:
+        for poly in obj.data.polygons:
+            poly.use_smooth = True
+    if settings.use_voxel_remesh:
+        prev_active = context.view_layer.objects.active
+        context.view_layer.objects.active = obj
+        obj.data.remesh_voxel_size = settings.voxel_size
+        bpy.ops.object.voxel_remesh()
+        context.view_layer.objects.active = prev_active
+
+
+def _find_preview_obj(source_name):
+    col = bpy.data.collections.get("bSpheres_Preview")
+    if col is None:
+        return None
+    for obj in col.objects:
+        if obj.get("bspheres_preview") and obj.get("bspheres_source") == source_name:
+            return obj
+    return None
+
+
 class MakeBSkin(bpy.types.Operator):
     """Create a new sculptable mesh from the bSphere control object without modifying it"""
     bl_idname = 'bspheres.make_bskin'
@@ -206,11 +248,7 @@ class MakeBSkin(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        obj = context.active_object
-        if obj is None or obj.type != 'MESH':
-            return False
-        mod_types = {m.type for m in obj.modifiers}
-        return {'MIRROR', 'SKIN', 'SUBSURF'}.issubset(mod_types)
+        return _is_bsphere_control(context.active_object)
 
     def execute(self, context):
         source_obj = context.active_object
@@ -227,14 +265,87 @@ class MakeBSkin(bpy.types.Operator):
         new_obj = bpy.data.objects.new(output_name, mesh)
         new_obj.matrix_world = source_obj.matrix_world.copy()
 
-        col = bpy.data.collections.get("bSpheres_Output")
-        if col is None:
-            col = bpy.data.collections.new("bSpheres_Output")
-        if col.name not in {c.name for c in context.scene.collection.children}:
-            context.scene.collection.children.link(col)
+        col = _ensure_collection("bSpheres_Output", context.scene)
         col.objects.link(new_obj)
 
+        _apply_bskin_settings(new_obj, source_obj.bspheres_skin_settings, context)
         bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
+        return {"FINISHED"}
+
+
+class BSpheresSkinSettings(bpy.types.PropertyGroup):
+    voxel_size: bpy.props.FloatProperty(
+        name="Voxel Size", default=0.02, min=0.001, max=1.0, step=0.1,
+        description="Voxel remesh resolution for baked output",
+    )
+    use_voxel_remesh: bpy.props.BoolProperty(
+        name="Voxel Remesh", default=True,
+        description="Apply voxel remesh after baking",
+    )
+    use_smooth_shading: bpy.props.BoolProperty(
+        name="Shade Smooth", default=True,
+        description="Set smooth shading on baked output",
+    )
+
+
+class PreviewBSkin(bpy.types.Operator):
+    """Create or refresh a temporary preview mesh from the bSphere control object"""
+    bl_idname = 'bspheres.preview_bskin'
+    bl_label = 'Preview bSkin'
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object)
+
+    def execute(self, context):
+        source_obj = context.active_object
+        previous_mode = context.mode
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        depsgraph = context.evaluated_depsgraph_get()
+        evaluated_obj = source_obj.evaluated_get(depsgraph)
+        new_mesh = bpy.data.meshes.new_from_object(evaluated_obj, depsgraph=depsgraph)
+
+        col = _ensure_collection("bSpheres_Preview", context.scene)
+        preview_obj = _find_preview_obj(source_obj.name)
+
+        if preview_obj is not None:
+            old_mesh = preview_obj.data
+            preview_obj.data = new_mesh
+            bpy.data.meshes.remove(old_mesh)
+        else:
+            name = source_obj.name
+            preview_name = ('bPreview' + name[7:]) if name.startswith('bSphere') else 'bPreview'
+            preview_obj = bpy.data.objects.new(preview_name, new_mesh)
+            preview_obj["bspheres_preview"] = True
+            preview_obj["bspheres_source"] = source_obj.name
+            preview_obj.matrix_world = source_obj.matrix_world.copy()
+            col.objects.link(preview_obj)
+
+        _apply_bskin_settings(preview_obj, source_obj.bspheres_skin_settings, context)
+        bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
+        return {"FINISHED"}
+
+
+class DeleteBSkinPreview(bpy.types.Operator):
+    """Delete the preview mesh for the active bSphere control object"""
+    bl_idname = 'bspheres.delete_bskin_preview'
+    bl_label = 'Delete Preview'
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj is not None and _find_preview_obj(obj.name) is not None
+
+    def execute(self, context):
+        preview_obj = _find_preview_obj(context.active_object.name)
+        if preview_obj is None:
+            return {"CANCELLED"}
+        mesh = preview_obj.data
+        bpy.data.objects.remove(preview_obj, do_unlink=True)
+        bpy.data.meshes.remove(mesh)
         return {"FINISHED"}
 
 
@@ -280,6 +391,19 @@ class BSpheresPanel(bpy.types.Panel):
                         sub = col.column()
                         sub.operator("object.skin_root_mark", text="Mark Root")
             
+                settings = obj.bspheres_skin_settings
+                layout.label(text="bSkin Settings:")
+                box = layout.column(align=True)
+                row = box.row(align=True)
+                row.prop(settings, "use_voxel_remesh", text="Remesh")
+                row.prop(settings, "voxel_size", text="Size")
+                box.prop(settings, "use_smooth_shading", text="Shade Smooth")
+
+                layout.label(text="Preview:")
+                row = layout.row(align=True)
+                row.operator("bspheres.preview_bskin", text="Preview / Refresh")
+                row.operator("bspheres.delete_bskin_preview", text="Delete")
+
                 split = layout.split()
                 col = split.column()
                 col.label(text="Convert to Sculptable Mesh")
