@@ -89,6 +89,7 @@ class applyBSphereModifiers(bpy.types.Operator):
         if settings.use_voxel_remesh:
             obj.data.remesh_voxel_size = settings.voxel_size
             bpy.ops.object.voxel_remesh()
+        _run_mesh_cleanup(obj, settings, context)
         if settings.use_smooth_shading:
             for poly in obj.data.polygons:
                 poly.use_smooth = True
@@ -229,6 +230,7 @@ def _apply_bskin_settings(obj, settings, context):
         bpy.ops.object.voxel_remesh()
         obj.select_set(prev_selected)
         context.view_layer.objects.active = prev_active
+    _run_mesh_cleanup(obj, settings, context)
     if settings.use_smooth_shading:
         for poly in obj.data.polygons:
             poly.use_smooth = True
@@ -244,6 +246,41 @@ def _find_preview_obj(source_name):
     return None
 
 
+def _warn_thin_branches(operator, source_obj, settings):
+    if not source_obj.data.skin_vertices:
+        return
+    skin_data = source_obj.data.skin_vertices[0].data
+    preserve_idx = source_obj.vertex_groups.find("bspheres_preserve")
+    for i, vert in enumerate(source_obj.data.vertices):
+        if preserve_idx >= 0 and any(g.group == preserve_idx for g in vert.groups):
+            continue
+        r = skin_data[i].radius
+        if r[0] < settings.min_branch_radius or r[1] < settings.min_branch_radius:
+            operator.report(
+                {'WARNING'},
+                f"Vertex {i}: skin radius {r[0]:.4f}×{r[1]:.4f} is below "
+                f"minimum {settings.min_branch_radius:.4f}",
+            )
+
+
+def _run_mesh_cleanup(obj, settings, context):
+    if not settings.use_merge_doubles and not settings.use_recalc_normals:
+        return
+    prev_active = context.view_layer.objects.active
+    prev_selected = obj.select_get()
+    context.view_layer.objects.active = obj
+    obj.select_set(True)
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    if settings.use_merge_doubles:
+        bpy.ops.mesh.merge_by_distance(threshold=settings.merge_threshold)
+    if settings.use_recalc_normals:
+        bpy.ops.mesh.normals_make_consistent(inside=False)
+    bpy.ops.object.mode_set(mode='OBJECT')
+    obj.select_set(prev_selected)
+    context.view_layer.objects.active = prev_active
+
+
 class MakeBSkin(bpy.types.Operator):
     """Create a new sculptable mesh from the bSphere control object without modifying it"""
     bl_idname = 'bspheres.make_bskin'
@@ -257,6 +294,9 @@ class MakeBSkin(bpy.types.Operator):
     def execute(self, context):
         source_obj = context.active_object
         previous_mode = context.mode
+        settings = source_obj.bspheres_skin_settings
+        if settings.warn_thin_branches:
+            _warn_thin_branches(self, source_obj, settings)
         bpy.ops.object.mode_set(mode='OBJECT')
 
         depsgraph = context.evaluated_depsgraph_get()
@@ -290,6 +330,26 @@ class BSpheresSkinSettings(bpy.types.PropertyGroup):
         name="Shade Smooth", default=True,
         description="Set smooth shading on baked output",
     )
+    use_merge_doubles: bpy.props.BoolProperty(
+        name="Merge Doubles", default=False,
+        description="Merge vertices by distance after baking",
+    )
+    merge_threshold: bpy.props.FloatProperty(
+        name="Merge Distance", default=0.001, min=0.00001, max=0.1, step=0.01,
+        description="Distance threshold for merge-by-distance",
+    )
+    use_recalc_normals: bpy.props.BoolProperty(
+        name="Recalculate Normals", default=True,
+        description="Recalculate normals outward after baking",
+    )
+    warn_thin_branches: bpy.props.BoolProperty(
+        name="Warn Thin Branches", default=True,
+        description="Report a warning when a vertex skin radius is below the minimum",
+    )
+    min_branch_radius: bpy.props.FloatProperty(
+        name="Min Radius", default=0.01, min=0.0001, max=1.0, step=0.01,
+        description="Skin radius below which a warning is issued",
+    )
 
 
 class PreviewBSkin(bpy.types.Operator):
@@ -305,6 +365,9 @@ class PreviewBSkin(bpy.types.Operator):
     def execute(self, context):
         source_obj = context.active_object
         previous_mode = context.mode
+        settings = source_obj.bspheres_skin_settings
+        if settings.warn_thin_branches:
+            _warn_thin_branches(self, source_obj, settings)
         bpy.ops.object.mode_set(mode='OBJECT')
 
         depsgraph = context.evaluated_depsgraph_get()
@@ -350,6 +413,44 @@ class DeleteBSkinPreview(bpy.types.Operator):
         mesh = preview_obj.data
         bpy.data.objects.remove(preview_obj, do_unlink=True)
         bpy.data.meshes.remove(mesh)
+        return {"FINISHED"}
+
+
+class BSphereMarkPreserve(bpy.types.Operator):
+    """Mark selected vertices as preserved (skip thin-branch warnings and cleanup thinning)"""
+    bl_idname = 'bspheres.mark_preserve'
+    bl_label = 'Mark Preserve'
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
+
+    def execute(self, context):
+        obj = context.active_object
+        vg = obj.vertex_groups.get("bspheres_preserve") or obj.vertex_groups.new(name="bspheres_preserve")
+        obj.vertex_groups.active_index = vg.index
+        bpy.ops.object.vertex_group_assign()
+        return {"FINISHED"}
+
+
+class BSphereClearPreserve(bpy.types.Operator):
+    """Unmark selected vertices from the preserve group"""
+    bl_idname = 'bspheres.clear_preserve'
+    bl_label = 'Clear Preserve'
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
+
+    def execute(self, context):
+        obj = context.active_object
+        vg = obj.vertex_groups.get("bspheres_preserve")
+        if vg is None:
+            return {"CANCELLED"}
+        obj.vertex_groups.active_index = vg.index
+        bpy.ops.object.vertex_group_remove_from()
         return {"FINISHED"}
 
 
@@ -403,11 +504,38 @@ class BSpheresPanel(bpy.types.Panel):
                     row.prop(settings, "use_voxel_remesh", text="Remesh")
                     row.prop(settings, "voxel_size", text="Size")
                     box.prop(settings, "use_smooth_shading", text="Shade Smooth")
+                    row = box.row(align=True)
+                    row.prop(settings, "use_merge_doubles", text="Merge Doubles")
+                    sub = row.row()
+                    sub.active = settings.use_merge_doubles
+                    sub.prop(settings, "merge_threshold", text="Dist")
+                    box.prop(settings, "use_recalc_normals", text="Recalculate Normals")
+                    row = box.row(align=True)
+                    row.prop(settings, "warn_thin_branches", text="Warn Thin Branches")
+                    sub = row.row()
+                    sub.active = settings.warn_thin_branches
+                    sub.prop(settings, "min_branch_radius", text="Min")
 
                     layout.label(text="Preview:")
                     row = layout.row(align=True)
                     row.operator("bspheres.preview_bskin", text="Preview / Refresh")
                     row.operator("bspheres.delete_bskin_preview", text="Delete")
+
+                    if context.mode == 'EDIT_MESH':
+                        bm = bmesh.from_edit_mesh(obj.data)
+                        active_elem = bm.select_history.active
+                        if isinstance(active_elem, bmesh.types.BMVert):
+                            idx = active_elem.index
+                            layout.label(text="Selected Node:")
+                            box2 = layout.column(align=True)
+                            if obj.data.skin_vertices and idx < len(obj.data.skin_vertices[0].data):
+                                sv = obj.data.skin_vertices[0].data[idx]
+                                r = sv.radius
+                                box2.label(text=f"Skin: {r[0]:.3f} × {r[1]:.3f}")
+                                box2.label(text=f"Root: {sv.use_root}  Loose: {sv.use_loose}")
+                            row2 = box2.row(align=True)
+                            row2.operator("bspheres.mark_preserve", text="Mark Preserve")
+                            row2.operator("bspheres.clear_preserve", text="Clear Preserve")
 
                 split = layout.split()
                 col = split.column()
