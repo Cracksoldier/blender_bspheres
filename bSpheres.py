@@ -270,15 +270,17 @@ def _run_mesh_cleanup(obj, settings, context):
     prev_selected = obj.select_get()
     context.view_layer.objects.active = obj
     obj.select_set(True)
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    if settings.use_merge_doubles:
-        bpy.ops.mesh.merge_by_distance(threshold=settings.merge_threshold)
-    if settings.use_recalc_normals:
-        bpy.ops.mesh.normals_make_consistent(inside=False)
-    bpy.ops.object.mode_set(mode='OBJECT')
-    obj.select_set(prev_selected)
-    context.view_layer.objects.active = prev_active
+    try:
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='SELECT')
+        if settings.use_merge_doubles:
+            bpy.ops.mesh.merge_by_distance(threshold=settings.merge_threshold)
+        if settings.use_recalc_normals:
+            bpy.ops.mesh.normals_make_consistent(inside=False)
+        bpy.ops.object.mode_set(mode='OBJECT')
+    finally:
+        obj.select_set(prev_selected)
+        context.view_layer.objects.active = prev_active
 
 
 class MakeBSkin(bpy.types.Operator):
@@ -295,9 +297,9 @@ class MakeBSkin(bpy.types.Operator):
         source_obj = context.active_object
         previous_mode = context.mode
         settings = source_obj.bspheres_skin_settings
+        bpy.ops.object.mode_set(mode='OBJECT')
         if settings.warn_thin_branches:
             _warn_thin_branches(self, source_obj, settings)
-        bpy.ops.object.mode_set(mode='OBJECT')
 
         depsgraph = context.evaluated_depsgraph_get()
         evaluated_obj = source_obj.evaluated_get(depsgraph)
@@ -339,7 +341,7 @@ class BSpheresSkinSettings(bpy.types.PropertyGroup):
         description="Distance threshold for merge-by-distance",
     )
     use_recalc_normals: bpy.props.BoolProperty(
-        name="Recalculate Normals", default=True,
+        name="Recalculate Normals", default=False,
         description="Recalculate normals outward after baking",
     )
     warn_thin_branches: bpy.props.BoolProperty(
@@ -366,9 +368,9 @@ class PreviewBSkin(bpy.types.Operator):
         source_obj = context.active_object
         previous_mode = context.mode
         settings = source_obj.bspheres_skin_settings
+        bpy.ops.object.mode_set(mode='OBJECT')
         if settings.warn_thin_branches:
             _warn_thin_branches(self, source_obj, settings)
-        bpy.ops.object.mode_set(mode='OBJECT')
 
         depsgraph = context.evaluated_depsgraph_get()
         evaluated_obj = source_obj.evaluated_get(depsgraph)
@@ -429,8 +431,10 @@ class BSphereMarkPreserve(bpy.types.Operator):
     def execute(self, context):
         obj = context.active_object
         vg = obj.vertex_groups.get("bspheres_preserve") or obj.vertex_groups.new(name="bspheres_preserve")
+        prev_active_idx = obj.vertex_groups.active_index
         obj.vertex_groups.active_index = vg.index
         bpy.ops.object.vertex_group_assign()
+        obj.vertex_groups.active_index = prev_active_idx
         return {"FINISHED"}
 
 
@@ -449,8 +453,10 @@ class BSphereClearPreserve(bpy.types.Operator):
         vg = obj.vertex_groups.get("bspheres_preserve")
         if vg is None:
             return {"CANCELLED"}
+        prev_active_idx = obj.vertex_groups.active_index
         obj.vertex_groups.active_index = vg.index
         bpy.ops.object.vertex_group_remove_from()
+        obj.vertex_groups.active_index = prev_active_idx
         return {"FINISHED"}
 
 
@@ -525,11 +531,11 @@ class BSpheresPanel(bpy.types.Panel):
                         bm = bmesh.from_edit_mesh(obj.data)
                         active_elem = bm.select_history.active
                         if isinstance(active_elem, bmesh.types.BMVert):
-                            idx = active_elem.index
                             layout.label(text="Selected Node:")
                             box2 = layout.column(align=True)
-                            if obj.data.skin_vertices and idx < len(obj.data.skin_vertices[0].data):
-                                sv = obj.data.skin_vertices[0].data[idx]
+                            skin_layers = bm.verts.layers.skin
+                            if skin_layers:
+                                sv = active_elem[skin_layers[0]]
                                 r = sv.radius
                                 box2.label(text=f"Skin: {r[0]:.3f} × {r[1]:.3f}")
                                 box2.label(text=f"Root: {sv.use_root}  Loose: {sv.use_loose}")
