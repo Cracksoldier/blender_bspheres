@@ -43,8 +43,12 @@ to open it).
 4. **Mark Loose / Clear Loose** — make vertices behave more like a grab brush, pulling
    the skin toward them instead of centering the skin on the vertex.
 5. **Viewport** — how much to subdivide the skin. Higher = smoother preview.
-6. **Apply** — applies all three modifiers, then voxel-remeshes the object at a voxel
-   size of 0.01 so overlapping skin volumes join into one watertight, sculptable mesh.
+6. **Make bSkin** — non-destructive bake. Creates a new plain mesh object in a
+   `bSpheres_Output` collection without touching the control structure, so you can keep
+   iterating. Run it as many times as you like; each run produces a fresh output object.
+7. **Apply** — destructive bake. Applies all three modifiers directly onto the control
+   object, then voxel-remeshes at a voxel size of 0.01 so overlapping skin volumes join
+   into one watertight, sculptable mesh. Use this when you are done iterating.
 
 ### Editing shortcuts
 
