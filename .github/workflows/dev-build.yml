@@ -1,0 +1,53 @@
+name: Dev build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BLENDER_VERSION: "4.2.3"   # keep in sync with ci.yml and release.yml
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Byte-compile Python (fast fail on syntax errors)
+        run: python -m compileall -q __init__.py bSpheres.py
+
+      - name: Install Blender runtime libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxxf86vm1 libxfixes3 libxi6 libxkbcommon0 libxrender1 \
+            libxext6 libsm6 libgl1
+
+      - name: Download Blender
+        run: |
+          base="blender-${BLENDER_VERSION}-linux-x64"
+          series="Blender${BLENDER_VERSION%.*}"
+          wget -q "https://download.blender.org/release/${series}/${base}.tar.xz"
+          tar -xf "${base}.tar.xz"
+          echo "$PWD/${base}" >> "$GITHUB_PATH"
+
+      - name: Validate & build extension
+        run: |
+          blender --command extension validate .
+          blender --command extension build \
+            --source-dir . \
+            --output-filepath "bspheres-dev-${{ env.SHORT_SHA }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: "bspheres-dev-${{ env.SHORT_SHA }}"
+          path: "bspheres-dev-${{ env.SHORT_SHA }}.zip"
+          retention-days: 14
