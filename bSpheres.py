@@ -69,7 +69,11 @@ class applyBSphereModifiers(bpy.types.Operator):
     bl_idname = 'tcg.apply_bsphere_modifiers'
     bl_label = 'Apply bSphere Modifiers'
     bl_options = {"REGISTER", "UNDO"}
- 
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object)
+
     def execute(self, context):
         obj = context.object
         bpy.ops.object.mode_set(mode='OBJECT')
@@ -176,9 +180,7 @@ class AddBMesh(bpy.types.Operator):
 
         # add the mesh as an object into the scene with this utility module
         from bpy_extras import object_utils
-        object_utils.object_data_add(context, mesh, operator=self)
-        
-        obj = context.scene.objects[mesh.name]
+        obj = object_utils.object_data_add(context, mesh, operator=self)
         for v in obj.data.vertices:
             v.select = True
         
@@ -215,7 +217,7 @@ def _ensure_collection(name, scene):
     col = bpy.data.collections.get(name)
     if col is None:
         col = bpy.data.collections.new(name)
-    if col.name not in {c.name for c in scene.collection.children}:
+    if col.name not in {c.name for c in scene.collection.children_recursive}:
         scene.collection.children.link(col)
     return col
 
@@ -224,12 +226,14 @@ def _apply_bskin_settings(obj, settings, context):
     if settings.use_voxel_remesh:
         prev_active = context.view_layer.objects.active
         prev_selected = obj.select_get()
-        context.view_layer.objects.active = obj
-        obj.select_set(True)
-        obj.data.remesh_voxel_size = settings.voxel_size
-        bpy.ops.object.voxel_remesh()
-        obj.select_set(prev_selected)
-        context.view_layer.objects.active = prev_active
+        try:
+            context.view_layer.objects.active = obj
+            obj.select_set(True)
+            obj.data.remesh_voxel_size = settings.voxel_size
+            bpy.ops.object.voxel_remesh()
+        finally:
+            obj.select_set(prev_selected)
+            context.view_layer.objects.active = prev_active
     _run_mesh_cleanup(obj, settings, context)
     if settings.use_smooth_shading:
         for poly in obj.data.polygons:
@@ -268,9 +272,15 @@ def _run_mesh_cleanup(obj, settings, context):
         return
     prev_active = context.view_layer.objects.active
     prev_selected = obj.select_get()
-    context.view_layer.objects.active = obj
-    obj.select_set(True)
+    # Deselect everything else so mode_set(EDIT) doesn't enter multi-object
+    # edit and run the cleanup operators on other selected meshes (e.g. the
+    # bSphere control object during a non-destructive bake).
+    other_selected = [o for o in context.selected_objects if o is not obj]
     try:
+        for o in other_selected:
+            o.select_set(False)
+        context.view_layer.objects.active = obj
+        obj.select_set(True)
         bpy.ops.object.mode_set(mode='EDIT')
         bpy.ops.mesh.select_all(action='SELECT')
         if settings.use_merge_doubles:
@@ -280,6 +290,8 @@ def _run_mesh_cleanup(obj, settings, context):
         bpy.ops.object.mode_set(mode='OBJECT')
     finally:
         obj.select_set(prev_selected)
+        for o in other_selected:
+            o.select_set(True)
         context.view_layer.objects.active = prev_active
 
 
@@ -383,6 +395,7 @@ class PreviewBSkin(bpy.types.Operator):
             old_mesh = preview_obj.data
             preview_obj.data = new_mesh
             bpy.data.meshes.remove(old_mesh)
+            preview_obj.matrix_world = source_obj.matrix_world.copy()
         else:
             name = source_obj.name
             preview_name = ('bPreview' + name[7:]) if name.startswith('bSphere') else 'bPreview'
@@ -434,7 +447,8 @@ class BSphereMarkPreserve(bpy.types.Operator):
         prev_active_idx = obj.vertex_groups.active_index
         obj.vertex_groups.active_index = vg.index
         bpy.ops.object.vertex_group_assign()
-        obj.vertex_groups.active_index = prev_active_idx
+        if prev_active_idx >= 0:
+            obj.vertex_groups.active_index = prev_active_idx
         return {"FINISHED"}
 
 
@@ -456,7 +470,8 @@ class BSphereClearPreserve(bpy.types.Operator):
         prev_active_idx = obj.vertex_groups.active_index
         obj.vertex_groups.active_index = vg.index
         bpy.ops.object.vertex_group_remove_from()
-        obj.vertex_groups.active_index = prev_active_idx
+        if prev_active_idx >= 0:
+            obj.vertex_groups.active_index = prev_active_idx
         return {"FINISHED"}
 
 
@@ -552,6 +567,3 @@ class BSpheresPanel(bpy.types.Panel):
                 layout.label(text="Extrude Vert: E")
                 layout.label(text="Scale Vert: Ctrl-A")
                 layout.label(text="Add Vert Between Verts: Ctrl-R")
-                context.space_data.shading.show_xray = True
-            else:
-                context.space_data.shading.show_xray = False
