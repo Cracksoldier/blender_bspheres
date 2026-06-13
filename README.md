@@ -68,8 +68,9 @@ to open it).
      the skin root. Useful for selecting the spine leading to a joint.
 8. **Generate Armature** — creates a Blender armature from the bSphere control mesh.
    Each edge becomes one bone; bones are parented to mirror the vertex graph. The skin
-   root vertex (set with **Mark Root**) determines the root bone. Only the unmirrored
-   half of the mesh is included — add an Armature Mirror modifier afterwards if needed.
+   root vertex (set with **Mark Root**) determines the root bone. The armature is placed
+   in a `bSpheres_Armatures` collection. Only the unmirrored half of the mesh is
+   included — add an Armature Mirror modifier afterwards if needed.
 9. **Preview / Refresh** — non-destructive on-demand preview. Creates a temporary mesh
    in a `bSpheres_Preview` collection. Re-clicking updates it in-place so the Outliner
    stays clean. Use **Delete** to remove it.
