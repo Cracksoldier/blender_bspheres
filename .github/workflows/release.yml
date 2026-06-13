@@ -65,6 +65,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "v${{ inputs.version }}"
-          name: "bSpheres v${{ inputs.version }}"
+          name: "bSpheres NX v${{ inputs.version }}"
           files: "bspheres-${{ inputs.version }}.zip"
           fail_on_unmatched_files: true

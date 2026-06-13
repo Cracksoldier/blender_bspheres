@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Blender addon (`bSpheres`) that emulates zBrush's zSpheres for fast base-mesh creation. It wraps Blender's existing single-vertex + Mirror/Skin/Subdivision-Surface modifier workflow behind a single panel so users can sketch base meshes by extruding/scaling vertices, then bake the result into a sculptable mesh.
+A Blender addon (`bSpheres NX`) that emulates zBrush's zSpheres for fast base-mesh creation. It wraps Blender's existing single-vertex + Mirror/Skin/Subdivision-Surface modifier workflow behind a single panel so users can sketch base meshes by extruding/scaling vertices, then bake the result into a sculptable mesh.
 
 This is a fork of [PapaTemporal/blender_bspheres](https://github.com/PapaTemporal/blender_bspheres), updated for the Blender Extensions system (4.2+).
 
@@ -16,7 +16,7 @@ There is no CLI or test harness — the addon only runs inside Blender. It is an
 
 - **Validate manifest:** `blender --command extension validate .` (from the repo folder).
 - **Build:** `blender --command extension build` → produces `bspheres-<version>.zip`.
-- **Install:** Blender *Preferences → Get Extensions → Install from Disk*, select the zip, enable it. The panel appears in the 3D Viewport N-panel under the **bSpheres** tab.
+- **Install:** Blender *Preferences → Get Extensions → Install from Disk*, select the zip, enable it. The panel appears in the 3D Viewport N-panel under the **bSpheres NX** tab.
 - **Iterate:** edit the `.py` files and toggle the extension off/on (or use *Reload Scripts*). Because it loads as a package, the relative import `from . bSpheres import *` in `__init__.py` resolves normally.
 
 Validate changes by exercising the full flow manually in Blender: **Create** → extrude/scale/move verts → adjust Mirror axes, Subdivision level, and bSkin Settings → **Preview / Refresh** → **Make bSkin** → **Apply**. There is no automated coverage to rely on.
