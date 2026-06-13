@@ -466,6 +466,12 @@ class PreviewBSkin(bpy.types.Operator):
             bpy.data.meshes.remove(old_mesh)
             preview_obj.matrix_world = source_obj.matrix_world.copy()
         else:
+            for orphan in list(col.objects):
+                if orphan.get("bspheres_preview") and orphan.get("bspheres_source") not in bpy.data.objects:
+                    orphan_mesh = orphan.data if orphan.type == 'MESH' else None
+                    bpy.data.objects.remove(orphan, do_unlink=True)
+                    if orphan_mesh and orphan_mesh.users == 0:
+                        bpy.data.meshes.remove(orphan_mesh)
             name = source_obj.name
             preview_name = ('bPreview' + name[7:]) if name.startswith('bSphere') else 'bPreview'
             preview_obj = bpy.data.objects.new(preview_name, new_mesh)

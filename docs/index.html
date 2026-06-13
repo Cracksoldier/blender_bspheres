@@ -101,9 +101,10 @@
 
   /* Shortcut table */
   .keys { width: 100%; border-collapse: collapse; }
-  .keys td { padding: 10px 0; border-bottom: 1px solid var(--line); vertical-align: middle; }
-  .keys tr:last-child td { border-bottom: none; }
-  .keys td:first-child { width: 150px; }
+  .keys td, .keys th { padding: 10px 0; border-bottom: 1px solid var(--line); vertical-align: middle; text-align: left; font-weight: normal; }
+  .keys tr:last-child td, .keys tr:last-child th { border-bottom: none; }
+  .keys td:first-child, .keys th:first-child { width: 150px; }
+  .keys thead th { color: var(--accent); font-weight: 700; font-size: .85rem; padding-bottom: 6px; }
   kbd {
     background: var(--kbd); border: 1px solid var(--line); border-bottom-width: 2px;
     border-radius: 6px; padding: 3px 8px; font: 600 .85rem/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -160,11 +161,11 @@
       <h2>Typical workflow</h2>
       <ol class="steps">
         <li>Press <kbd>N</kbd> in the 3D Viewport, open the <strong>bSpheres NX</strong> tab, and click <strong>Create</strong>. This builds a single-vertex mesh with Mirror, Skin, and Subdivision modifiers already stacked.</li>
-        <li>Enter Edit Mode (<kbd>Tab</kbd>). Use <kbd>E</kbd> to extrude new joints, <kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>A</kbd> to scale the skin at the selected vertex, <kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>R</kbd> to insert a midpoint between two vertices, and <kbd>G</kbd> to reposition joints. Toggle Mirror axes in the panel for symmetry while you work.</li>
+        <li>Enter Edit Mode (<kbd>Tab</kbd>). Use <kbd>E</kbd> to extrude new joints, <kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>A</kbd> to scale the skin at the selected vertex (native Blender Skin modifier shortcut), <kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>R</kbd> to select two vertices then click between them to add a midpoint, and <kbd>G</kbd> to reposition joints. Toggle Mirror axes in the panel for symmetry while you work.</li>
         <li>Click <strong>Preview / Refresh</strong> at any point to generate a temporary baked mesh in <code>bSpheres_Preview</code> without leaving the control object. Click it again after any edit to update in-place.</li>
         <li>Tune <strong>bSkin Settings</strong> — voxel remesh size, smooth shading, merge doubles — until the previewed output looks right.</li>
         <li>When satisfied, click <strong>Make bSkin</strong> to produce a permanent bake in <code>bSpheres_Output</code> (non-destructive — the control mesh is untouched and you can bake again any time). Or click <strong>Apply</strong> to bake directly onto the control object when you are fully done iterating.</li>
-        <li><em>Armature workflow (optional):</em> In Edit Mode, select the base joint and use <strong>Mark Root</strong> in the panel (or Blender's Skin → Mark Root). Return to Object Mode and click <strong>Generate Armature</strong>. Each edge becomes one bone, parented root-outward. The result lands in <code>bSpheres_Armatures</code>.</li>
+        <li><em>Armature workflow (optional):</em> If you want a different vertex to be the skeleton root (the initial vertex is auto-marked on Create), select it in Edit Mode and use <strong>Mark Root</strong> in the panel. Then click <strong>Generate Armature</strong> from any mode — the operator switches to Object Mode automatically. Each edge becomes one bone, parented root-outward. The result lands in <code>bSpheres_Armatures</code>.</li>
       </ol>
     </section>
 
@@ -191,18 +192,18 @@
       <table class="keys">
         <thead>
           <tr>
-            <td style="color:var(--accent);font-weight:700;font-size:.85rem;padding-bottom:6px;">Setting</td>
-            <td style="color:var(--accent);font-weight:700;font-size:.85rem;padding-bottom:6px;">Default</td>
-            <td style="color:var(--accent);font-weight:700;font-size:.85rem;padding-bottom:6px;">Range</td>
-            <td style="color:var(--accent);font-weight:700;font-size:.85rem;padding-bottom:6px;">Effect</td>
+            <th scope="col">Setting</th>
+            <th scope="col">Default</th>
+            <th scope="col">Range</th>
+            <th scope="col">Effect</th>
           </tr>
         </thead>
         <tbody>
-          <tr><td>Voxel Remesh</td><td>✓</td><td>—</td><td>Runs Blender's voxel remesher on the baked skin to produce a clean, uniform mesh.</td></tr>
+          <tr><td>Remesh</td><td>✓</td><td>—</td><td>Runs Blender's voxel remesher on the baked skin to produce a clean, uniform mesh.</td></tr>
           <tr><td>Voxel Size</td><td><code>0.02</code></td><td>0.001 – 1.0</td><td>Grid cell size for remeshing. Smaller = more polygons and finer detail; larger = coarser, lighter mesh.</td></tr>
-          <tr><td>Smooth Shading</td><td>✓</td><td>—</td><td>Sets shade-smooth on the output so it renders without hard faceting.</td></tr>
+          <tr><td>Shade Smooth</td><td>✓</td><td>—</td><td>Sets shade-smooth on the output so it renders without hard faceting.</td></tr>
           <tr><td>Merge Doubles</td><td>✗</td><td>—</td><td>Merges vertices that are within the threshold distance. Useful for cleaning up seams.</td></tr>
-          <tr><td>Merge Threshold</td><td><code>0.001</code></td><td>0.00001 – 0.1</td><td>Distance used by merge-by-distance. Only active when Merge Doubles is enabled.</td></tr>
+          <tr><td>Merge Distance</td><td><code>0.001</code></td><td>0.00001 – 0.1</td><td>Distance used by merge-by-distance. Only active when Merge Doubles is enabled.</td></tr>
           <tr><td>Recalculate Normals</td><td>✗</td><td>—</td><td>Recalculates face normals to point outward. Helpful if some faces appear inverted after baking.</td></tr>
           <tr><td>Warn Thin Branches</td><td>✓</td><td>—</td><td>Reports a status-bar warning for every vertex whose skin radius is below the minimum. Vertices marked <strong>Preserve</strong> are exempt.</td></tr>
           <tr><td>Min Branch Radius</td><td><code>0.01</code></td><td>0.0001 – 1.0</td><td>The radius threshold that triggers thin-branch warnings. Raise it if you want warnings for slightly larger radii.</td></tr>
