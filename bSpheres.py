@@ -189,6 +189,7 @@ class AddBMesh(bpy.types.Operator):
         bpy.ops.object.mode_set(mode='OBJECT')
         
         bpy.ops.object.modifier_add(type='MIRROR')
+        bpy.context.object.modifiers["Mirror"].use_axis = (False, True, False)
         bpy.ops.object.modifier_add(type='SKIN')
         bpy.ops.object.modifier_add(type='SUBSURF')
         bpy.context.object.modifiers["Skin"].use_x_symmetry = False
