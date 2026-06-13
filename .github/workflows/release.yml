@@ -7,6 +7,11 @@ on:
         description: "Release version X.Y.Z (sets manifest version, tag v<version>, and release)"
         required: true
         type: string
+      prerelease:
+        description: "Mark as pre-release (dev build)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # commit the version bump, push the tag, create the release
@@ -68,3 +73,4 @@ jobs:
           name: "bSpheres NX v${{ inputs.version }}"
           files: "bspheres-${{ inputs.version }}.zip"
           fail_on_unmatched_files: true
+          prerelease: ${{ inputs.prerelease }}
