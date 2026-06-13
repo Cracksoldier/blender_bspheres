@@ -14,6 +14,7 @@
 import bpy
 import bmesh
 from bpy_extras.object_utils import AddObjectHelper
+from collections import deque
 
 # Maps context.mode values (e.g. 'EDIT_MESH') to the values mode_set() accepts
 # (e.g. 'EDIT'). Anything not listed is assumed to already be a valid mode_set value.
@@ -296,6 +297,42 @@ def _run_mesh_cleanup(obj, settings, context):
         context.view_layer.objects.active = prev_active
 
 
+def _build_mesh_graph(obj):
+    adj = {i: [] for i in range(len(obj.data.vertices))}
+    for edge in obj.data.edges:
+        a, b = edge.vertices
+        adj[a].append(b)
+        adj[b].append(a)
+    return adj
+
+
+def _find_skin_root(obj):
+    if not obj.data.skin_vertices:
+        return -1
+    skin_data = obj.data.skin_vertices[0].data
+    for i, sv in enumerate(skin_data):
+        if sv.use_root:
+            return i
+    return -1
+
+
+def _bfs_tree(adj, root_idx):
+    parent_map = {root_idx: None}
+    visited = {root_idx}
+    queue = deque([root_idx])
+    found_cycle = False
+    while queue:
+        v = queue.popleft()
+        for nb in adj[v]:
+            if nb not in visited:
+                visited.add(nb)
+                parent_map[nb] = v
+                queue.append(nb)
+            elif nb != parent_map[v]:
+                found_cycle = True
+    return parent_map, visited, found_cycle
+
+
 class MakeBSkin(bpy.types.Operator):
     """Create a new sculptable mesh from the bSphere control object without modifying it"""
     bl_idname = 'bspheres.make_bskin'
@@ -476,6 +513,206 @@ class BSphereClearPreserve(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class GenerateBSphereArmature(bpy.types.Operator):
+    """Generate a Blender armature from the bSphere control mesh"""
+    bl_idname = 'bspheres.generate_armature'
+    bl_label = 'Generate Armature'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object)
+
+    def execute(self, context):
+        obj = context.active_object
+        previous_mode = context.mode
+
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        root_idx = _find_skin_root(obj)
+        if root_idx < 0:
+            self.report({'ERROR'}, "No skin root marked. Mark a vertex as root first.")
+            bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
+            return {'CANCELLED'}
+
+        adj = _build_mesh_graph(obj)
+        parent_map, visited, found_cycle = _bfs_tree(adj, root_idx)
+
+        if found_cycle:
+            self.report({'WARNING'}, "Cycle detected in mesh graph — cycle edges are skipped.")
+
+        n_verts = len(obj.data.vertices)
+        if len(visited) < n_verts:
+            self.report(
+                {'WARNING'},
+                f"{n_verts - len(visited)} vertices not reachable from root — they will not become bones.",
+            )
+
+        world_positions = [obj.matrix_world @ v.co for v in obj.data.vertices]
+
+        name = obj.name
+        arm_name = ('bArmature' + name[7:]) if name.startswith('bSphere') else 'bArmature'
+        arm_data = bpy.data.armatures.new(arm_name)
+        arm_obj = bpy.data.objects.new(arm_name, arm_data)
+        context.scene.collection.objects.link(arm_obj)
+
+        obj.select_set(False)
+        context.view_layer.objects.active = arm_obj
+        arm_obj.select_set(True)
+        bpy.ops.object.mode_set(mode='EDIT')
+
+        bone_refs = {}
+        for child_idx, par_idx in parent_map.items():
+            if par_idx is None:
+                continue
+            head = world_positions[par_idx]
+            tail = world_positions[child_idx]
+            if (tail - head).length < 1e-6:
+                self.report({'WARNING'}, f"Skipping zero-length edge {par_idx}→{child_idx}.")
+                continue
+            bone = arm_data.edit_bones.new(f"bone_{par_idx}_{child_idx}")
+            bone.head = head
+            bone.tail = tail
+            bone_refs[child_idx] = (bone, par_idx)
+
+        for child_idx, (bone, par_idx) in bone_refs.items():
+            if par_idx in bone_refs:
+                bone.parent = bone_refs[par_idx][0]
+
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        arm_obj.select_set(False)
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
+
+        self.report({'INFO'}, f"Armature '{arm_name}' generated. Note: only the unmirrored half is included.")
+        return {'FINISHED'}
+
+
+class BSphereSelectChildChain(bpy.types.Operator):
+    """Select all vertices downstream of the active vertex (away from root)"""
+    bl_idname = 'bspheres.select_child_chain'
+    bl_label = 'Select Child Chain'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
+
+    def execute(self, context):
+        obj = context.active_object
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.verts.ensure_lookup_table()
+
+        skin_layers = bm.verts.layers.skin
+        if not skin_layers:
+            self.report({'WARNING'}, "No skin layer found.")
+            return {'CANCELLED'}
+        skin_layer = skin_layers[0]
+
+        root_vert = next((v for v in bm.verts if v[skin_layer].use_root), None)
+        if root_vert is None:
+            self.report({'WARNING'}, "No skin root marked. Mark a vertex as root first.")
+            return {'CANCELLED'}
+
+        active = bm.select_history.active
+        if not isinstance(active, bmesh.types.BMVert):
+            self.report({'WARNING'}, "No active vertex. Select a vertex first.")
+            return {'CANCELLED'}
+
+        adj = {v.index: [e.other_vert(v).index for e in v.link_edges] for v in bm.verts}
+        parent_map, visited, found_cycle = _bfs_tree(adj, root_vert.index)
+
+        if active.index not in visited:
+            self.report({'WARNING'}, "Active vertex is not reachable from root.")
+            return {'CANCELLED'}
+        if found_cycle:
+            self.report({'WARNING'}, "Cycle detected in mesh graph.")
+
+        children_map = {v: [] for v in parent_map}
+        for child, par in parent_map.items():
+            if par is not None:
+                children_map[par].append(child)
+
+        child_chain = set()
+        stack = deque(children_map.get(active.index, []))
+        while stack:
+            v = stack.popleft()
+            if v not in child_chain:
+                child_chain.add(v)
+                stack.extend(children_map.get(v, []))
+
+        if not child_chain:
+            self.report({'INFO'}, "No child vertices found from active vertex.")
+            return {'FINISHED'}
+
+        for v in bm.verts:
+            if v.index in child_chain:
+                v.select = True
+
+        bmesh.update_edit_mesh(obj.data)
+        return {'FINISHED'}
+
+
+class BSphereSelectParentChain(bpy.types.Operator):
+    """Select all vertices upstream of the active vertex (toward root)"""
+    bl_idname = 'bspheres.select_parent_chain'
+    bl_label = 'Select Parent Chain'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
+
+    def execute(self, context):
+        obj = context.active_object
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.verts.ensure_lookup_table()
+
+        skin_layers = bm.verts.layers.skin
+        if not skin_layers:
+            self.report({'WARNING'}, "No skin layer found.")
+            return {'CANCELLED'}
+        skin_layer = skin_layers[0]
+
+        root_vert = next((v for v in bm.verts if v[skin_layer].use_root), None)
+        if root_vert is None:
+            self.report({'WARNING'}, "No skin root marked. Mark a vertex as root first.")
+            return {'CANCELLED'}
+
+        active = bm.select_history.active
+        if not isinstance(active, bmesh.types.BMVert):
+            self.report({'WARNING'}, "No active vertex. Select a vertex first.")
+            return {'CANCELLED'}
+
+        adj = {v.index: [e.other_vert(v).index for e in v.link_edges] for v in bm.verts}
+        parent_map, visited, found_cycle = _bfs_tree(adj, root_vert.index)
+
+        if active.index not in visited:
+            self.report({'WARNING'}, "Active vertex is not reachable from root.")
+            return {'CANCELLED'}
+        if found_cycle:
+            self.report({'WARNING'}, "Cycle detected in mesh graph.")
+
+        parent_chain = set()
+        current = parent_map.get(active.index)
+        while current is not None:
+            parent_chain.add(current)
+            current = parent_map.get(current)
+
+        if not parent_chain:
+            self.report({'INFO'}, "Active vertex is the root — no parent chain.")
+            return {'FINISHED'}
+
+        for v in bm.verts:
+            if v.index in parent_chain:
+                v.select = True
+
+        bmesh.update_edit_mesh(obj.data)
+        return {'FINISHED'}
+
+
 class BSpheresPanel(bpy.types.Panel):
     bl_idname = 'OBJECT_PT_bSpheres_Panel'
     bl_label = 'bSpheres NX'
@@ -543,6 +780,9 @@ class BSpheresPanel(bpy.types.Panel):
                     row.operator("bspheres.preview_bskin", text="Preview / Refresh")
                     row.operator("bspheres.delete_bskin_preview", text="Delete")
 
+                    layout.label(text="Armature:")
+                    layout.operator("bspheres.generate_armature", text="Generate Armature")
+
                     if context.mode == 'EDIT_MESH':
                         bm = bmesh.from_edit_mesh(obj.data)
                         active_elem = bm.select_history.active
@@ -558,6 +798,10 @@ class BSpheresPanel(bpy.types.Panel):
                             row2 = box2.row(align=True)
                             row2.operator("bspheres.mark_preserve", text="Mark Preserve")
                             row2.operator("bspheres.clear_preserve", text="Clear Preserve")
+                            layout.label(text="Chain Selection:")
+                            row3 = layout.row(align=True)
+                            row3.operator("bspheres.select_child_chain", text="Select Children")
+                            row3.operator("bspheres.select_parent_chain", text="Select Parents")
 
                 split = layout.split()
                 col = split.column()
