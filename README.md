@@ -81,6 +81,16 @@ to open it).
     object, then post-processes using the same bSkin Settings (remesh, smooth, cleanup).
     Use this when you are done iterating.
 
+### Addon preferences
+
+Go to **Edit → Preferences → Add-ons → bSpheres NX** to configure:
+
+- **Default Mirror Axes on Create (X / Y / Z)** — which axes are enabled on the Mirror
+  modifier when you click **Create**. Default is Y only (matching the original behaviour).
+  Uncheck all three to start with no mirroring active.
+
+These are addon-wide settings and persist across Blender sessions.
+
 ### Editing shortcuts
 
 While sketching the bSphere in Edit Mode:
