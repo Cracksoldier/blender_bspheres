@@ -1,4 +1,4 @@
-# Manual Test Plan — bSpheres features since v1.0.0
+# Manual Test Plan — bSpheres NX features since v1.0.0
 
 Covers all features added after the v1.0.0 release:
 - **Feature 01** — Non-destructive Make bSkin operator

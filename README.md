@@ -23,7 +23,7 @@ distributable zip with Blender's command-line tools:
 
 ```sh
 blender --command extension validate .
-blender --command extension build      # produces bspheres-nx-<version>.zip
+blender --command extension build      # produces bspheres-<version>.zip
 ```
 
 Then in Blender: **Edit → Preferences → Get Extensions → Install from Disk…**, pick
