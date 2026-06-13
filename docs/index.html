@@ -3,20 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>bSpheres — zSpheres-style base meshes for Blender</title>
+<title>bSpheres NX — zSpheres-style base meshes for Blender</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<meta name="description" content="bSpheres is a Blender add-on that brings zBrush-style zSpheres to Blender for fast base-mesh creation. Compatible with Blender 4.2 LTS through 5.x.">
+<meta name="description" content="bSpheres NX is a Blender add-on that brings zBrush-style zSpheres to Blender for fast base-mesh creation. Compatible with Blender 4.2 LTS through 5.x.">
 <style>
   :root {
-    --bg: #0f1115;
-    --bg-soft: #161a21;
-    --card: #1b212b;
-    --line: #2a313d;
-    --text: #e6e9ef;
-    --muted: #9aa4b2;
-    --accent: #ff7a3c;       /* zSphere-ish clay orange */
-    --accent-2: #ffb07a;
-    --kbd: #232b36;
+    --bg: #04101d;
+    --bg-soft: #071a2c;
+    --card: #0a1f33;
+    --line: rgba(125,190,245,0.18);
+    --text: #d9ecfa;
+    --muted: #7e9cb8;
+    --accent: #5fd4ff;       /* glacier cyan */
+    --accent-2: #7f9bff;     /* arctic blue */
+    --kbd: #0d2540;
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
@@ -33,8 +33,8 @@
   /* Hero */
   header.hero {
     background:
-      radial-gradient(900px 400px at 80% -10%, rgba(255,122,60,.18), transparent 60%),
-      radial-gradient(700px 350px at 0% 0%, rgba(255,176,122,.10), transparent 55%),
+      radial-gradient(900px 400px at 80% -10%, rgba(95,212,255,.12), transparent 60%),
+      radial-gradient(700px 350px at 0% 0%, rgba(127,155,255,.07), transparent 55%),
       var(--bg-soft);
     border-bottom: 1px solid var(--line);
     padding: 72px 0 56px;
@@ -44,11 +44,12 @@
     font-weight: 800; font-size: 2.8rem; letter-spacing: -.02em; margin: 0;
   }
   .logo .b { color: var(--accent); }
+  .logo .nx { color: var(--accent-2); font-size: .65em; letter-spacing: .08em; }
   .tagline { color: var(--muted); font-size: 1.2rem; margin: .5rem 0 0; }
   .compat {
     display: inline-block; margin-top: 18px; padding: 5px 12px; border-radius: 999px;
-    background: rgba(255,122,60,.12); color: var(--accent-2);
-    border: 1px solid rgba(255,122,60,.35); font-size: .85rem; font-weight: 600;
+    background: rgba(95,212,255,.10); color: var(--accent);
+    border: 1px solid rgba(95,212,255,.32); font-size: .85rem; font-weight: 600;
   }
   .cta { margin-top: 28px; display: flex; flex-wrap: wrap; gap: 12px; }
   .btn {
@@ -56,7 +57,7 @@
     font-weight: 700; text-decoration: none; transition: transform .08s ease, filter .15s ease;
   }
   .btn:hover { transform: translateY(-1px); filter: brightness(1.07); }
-  .btn-primary { background: var(--accent); color: #1a1206; }
+  .btn-primary { background: var(--accent); color: #030b14; }
   .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
 
   /* Sections */
@@ -70,7 +71,7 @@
     content: ""; width: 10px; height: 10px; border-radius: 3px;
     background: var(--accent); display: inline-block;
   }
-  p { color: #cdd3dc; }
+  p { color: #b8d5e8; }
 
   /* Steps */
   ol.steps { counter-reset: step; list-style: none; padding: 0; margin: 0; }
@@ -118,7 +119,7 @@
 <body>
   <header class="hero">
     <div class="wrap">
-      <h1 class="logo"><span class="b">b</span>Spheres</h1>
+      <h1 class="logo"><span class="b">b</span>Spheres <span class="nx">NX</span></h1>
       <p class="tagline">zSpheres-style base-mesh creation for Blender.</p>
       <span class="compat">Blender 4.2 LTS&nbsp;→&nbsp;5.x</span>
       <div class="cta">
@@ -135,7 +136,7 @@
         zBrush has a handy tool called <strong>zSpheres</strong> for blocking out quick base
         meshes. Blender can do the same thing with a single-vertex mesh and the Mirror,
         Skin, and Subdivision&nbsp;Surface modifiers — but the setup is fiddly.
-        <strong>bSpheres</strong> wraps all of that behind one panel so you can just start
+        <strong>bSpheres NX</strong> wraps all of that behind one panel so you can just start
         sketching, then bake the result into a watertight, sculptable mesh.
       </p>
     </section>
@@ -143,12 +144,12 @@
     <section>
       <h2>Install</h2>
       <ol class="steps">
-        <li>Download <code>bspheres-&lt;version&gt;.zip</code> from the
+        <li>Download <code>bspheres-nx-&lt;version&gt;.zip</code> from the
           <a data-releases href="#">Releases page</a>.</li>
         <li>In Blender, open <strong>Edit → Preferences → Get Extensions</strong>.</li>
         <li>Use the dropdown (top-right) → <strong>Install from Disk…</strong> and pick the zip.</li>
-        <li>Enable <strong>bSpheres</strong>, then press <kbd>N</kbd> in the 3D Viewport and
-          open the <strong>bSpheres</strong> tab in the sidebar.</li>
+        <li>Enable <strong>bSpheres NX</strong>, then press <kbd>N</kbd> in the 3D Viewport and
+          open the <strong>bSpheres NX</strong> tab in the sidebar.</li>
       </ol>
     </section>
 

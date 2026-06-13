@@ -477,10 +477,10 @@ class BSphereClearPreserve(bpy.types.Operator):
 
 class BSpheresPanel(bpy.types.Panel):
     bl_idname = 'OBJECT_PT_bSpheres_Panel'
-    bl_label = 'bSpheres'
+    bl_label = 'bSpheres NX'
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = 'bSpheres'
+    bl_category = 'bSpheres NX'
  
     def draw(self, context):
         layout = self.layout
