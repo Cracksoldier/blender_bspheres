@@ -58,17 +58,25 @@ to open it).
      `bspheres_preserve` group are exempt. The warning fires during **Make bSkin**
      and **Preview / Refresh**.
 7. **Selected Node** (Edit Mode only) — when a vertex is active, shows its live skin
-   radius and root/loose flags, plus two buttons:
+   radius and root/loose flags, plus buttons:
    - **Mark Preserve** — adds the selected vertex to the `bspheres_preserve` group,
      exempting it from the thin-branch warning.
    - **Clear Preserve** — removes the selected vertex from that group.
-8. **Preview / Refresh** — non-destructive on-demand preview. Creates a temporary mesh
+   - **Select Children** — selects all vertices downstream of the active vertex
+     (away from the skin root). Useful for posing a limb or tail as a unit.
+   - **Select Parents** — selects all vertices upstream of the active vertex back to
+     the skin root. Useful for selecting the spine leading to a joint.
+8. **Generate Armature** — creates a Blender armature from the bSphere control mesh.
+   Each edge becomes one bone; bones are parented to mirror the vertex graph. The skin
+   root vertex (set with **Mark Root**) determines the root bone. Only the unmirrored
+   half of the mesh is included — add an Armature Mirror modifier afterwards if needed.
+9. **Preview / Refresh** — non-destructive on-demand preview. Creates a temporary mesh
    in a `bSpheres_Preview` collection. Re-clicking updates it in-place so the Outliner
    stays clean. Use **Delete** to remove it.
-9. **Make bSkin** — non-destructive permanent bake. Creates a new plain mesh object in a
-   `bSpheres_Output` collection without touching the control structure. Each run produces
-   a fresh output object named `bSkin…`.
-10. **Apply** — destructive bake. Applies all three modifiers directly onto the control
+10. **Make bSkin** — non-destructive permanent bake. Creates a new plain mesh object in a
+    `bSpheres_Output` collection without touching the control structure. Each run produces
+    a fresh output object named `bSkin…`.
+11. **Apply** — destructive bake. Applies all three modifiers directly onto the control
     object, then post-processes using the same bSkin Settings (remesh, smooth, cleanup).
     Use this when you are done iterating.
 
