@@ -318,19 +318,50 @@ def _find_skin_root(obj):
 
 def _bfs_tree(adj, root_idx):
     parent_map = {root_idx: None}
-    visited = {root_idx}
     queue = deque([root_idx])
     found_cycle = False
     while queue:
         v = queue.popleft()
         for nb in adj[v]:
-            if nb not in visited:
-                visited.add(nb)
+            if nb not in parent_map:
                 parent_map[nb] = v
                 queue.append(nb)
             elif nb != parent_map[v]:
                 found_cycle = True
-    return parent_map, visited, found_cycle
+    return parent_map, found_cycle
+
+
+def _get_chain_graph(operator, context):
+    obj = context.active_object
+    bm = bmesh.from_edit_mesh(obj.data)
+    bm.verts.ensure_lookup_table()
+
+    skin_layers = bm.verts.layers.skin
+    if not skin_layers:
+        operator.report({'WARNING'}, "No skin layer found.")
+        return None
+    skin_layer = skin_layers[0]
+
+    root_vert = next((v for v in bm.verts if v[skin_layer].use_root), None)
+    if root_vert is None:
+        operator.report({'WARNING'}, "No skin root marked. Mark a vertex as root first.")
+        return None
+
+    active = bm.select_history.active
+    if not isinstance(active, bmesh.types.BMVert):
+        operator.report({'WARNING'}, "No active vertex. Select a vertex first.")
+        return None
+
+    adj = {v.index: [e.other_vert(v).index for e in v.link_edges] for v in bm.verts}
+    parent_map, found_cycle = _bfs_tree(adj, root_vert.index)
+
+    if active.index not in parent_map:
+        operator.report({'WARNING'}, "Active vertex is not reachable from root.")
+        return None
+    if found_cycle:
+        operator.report({'WARNING'}, "Cycle detected in mesh graph.")
+
+    return bm, parent_map, active
 
 
 class MakeBSkin(bpy.types.Operator):
@@ -536,16 +567,16 @@ class GenerateBSphereArmature(bpy.types.Operator):
             return {'CANCELLED'}
 
         adj = _build_mesh_graph(obj)
-        parent_map, visited, found_cycle = _bfs_tree(adj, root_idx)
+        parent_map, found_cycle = _bfs_tree(adj, root_idx)
 
         if found_cycle:
             self.report({'WARNING'}, "Cycle detected in mesh graph — cycle edges are skipped.")
 
         n_verts = len(obj.data.vertices)
-        if len(visited) < n_verts:
+        if len(parent_map) < n_verts:
             self.report(
                 {'WARNING'},
-                f"{n_verts - len(visited)} vertices not reachable from root — they will not become bones.",
+                f"{n_verts - len(parent_map)} vertices not reachable from root — they will not become bones.",
             )
 
         world_positions = [obj.matrix_world @ v.co for v in obj.data.vertices]
@@ -554,37 +585,50 @@ class GenerateBSphereArmature(bpy.types.Operator):
         arm_name = ('bArmature' + name[7:]) if name.startswith('bSphere') else 'bArmature'
         arm_data = bpy.data.armatures.new(arm_name)
         arm_obj = bpy.data.objects.new(arm_name, arm_data)
-        context.scene.collection.objects.link(arm_obj)
+        _ensure_collection("bSpheres_Armatures", context.scene).objects.link(arm_obj)
 
-        obj.select_set(False)
-        context.view_layer.objects.active = arm_obj
-        arm_obj.select_set(True)
-        bpy.ops.object.mode_set(mode='EDIT')
+        prev_active = context.view_layer.objects.active
+        other_selected = [o for o in context.selected_objects if o is not obj]
+        try:
+            for o in other_selected:
+                o.select_set(False)
+            obj.select_set(False)
+            context.view_layer.objects.active = arm_obj
+            arm_obj.select_set(True)
+            bpy.ops.object.mode_set(mode='EDIT')
 
-        bone_refs = {}
-        for child_idx, par_idx in parent_map.items():
-            if par_idx is None:
-                continue
-            head = world_positions[par_idx]
-            tail = world_positions[child_idx]
-            if (tail - head).length < 1e-6:
-                self.report({'WARNING'}, f"Skipping zero-length edge {par_idx}→{child_idx}.")
-                continue
-            bone = arm_data.edit_bones.new(f"bone_{par_idx}_{child_idx}")
-            bone.head = head
-            bone.tail = tail
-            bone_refs[child_idx] = (bone, par_idx)
+            bone_refs = {}
+            for child_idx, par_idx in parent_map.items():
+                if par_idx is None:
+                    continue
+                head = world_positions[par_idx]
+                tail = world_positions[child_idx]
+                if (tail - head).length < 1e-6:
+                    self.report({'WARNING'}, f"Skipping zero-length edge {par_idx}→{child_idx}.")
+                    continue
+                bone = arm_data.edit_bones.new(f"bone_{par_idx}_{child_idx}")
+                bone.head = head
+                bone.tail = tail
+                bone_refs[child_idx] = (bone, par_idx)
 
-        for child_idx, (bone, par_idx) in bone_refs.items():
-            if par_idx in bone_refs:
-                bone.parent = bone_refs[par_idx][0]
+            for child_idx, (bone, par_idx) in bone_refs.items():
+                if par_idx in bone_refs:
+                    bone.parent = bone_refs[par_idx][0]
+                elif par_idx != root_idx:
+                    self.report(
+                        {'WARNING'},
+                        f"Bone for vertex {child_idx} is disconnected — "
+                        f"its parent edge to vertex {par_idx} was skipped.",
+                    )
 
-        bpy.ops.object.mode_set(mode='OBJECT')
-
-        arm_obj.select_set(False)
-        obj.select_set(True)
-        context.view_layer.objects.active = obj
-        bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
+            bpy.ops.object.mode_set(mode='OBJECT')
+        finally:
+            arm_obj.select_set(False)
+            obj.select_set(True)
+            for o in other_selected:
+                o.select_set(True)
+            context.view_layer.objects.active = prev_active
+            bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
 
         self.report({'INFO'}, f"Armature '{arm_name}' generated. Note: only the unmirrored half is included.")
         return {'FINISHED'}
@@ -601,47 +645,23 @@ class BSphereSelectChildChain(bpy.types.Operator):
         return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
 
     def execute(self, context):
+        result = _get_chain_graph(self, context)
+        if result is None:
+            return {'CANCELLED'}
+        bm, parent_map, active = result
         obj = context.active_object
-        bm = bmesh.from_edit_mesh(obj.data)
-        bm.verts.ensure_lookup_table()
 
-        skin_layers = bm.verts.layers.skin
-        if not skin_layers:
-            self.report({'WARNING'}, "No skin layer found.")
-            return {'CANCELLED'}
-        skin_layer = skin_layers[0]
-
-        root_vert = next((v for v in bm.verts if v[skin_layer].use_root), None)
-        if root_vert is None:
-            self.report({'WARNING'}, "No skin root marked. Mark a vertex as root first.")
-            return {'CANCELLED'}
-
-        active = bm.select_history.active
-        if not isinstance(active, bmesh.types.BMVert):
-            self.report({'WARNING'}, "No active vertex. Select a vertex first.")
-            return {'CANCELLED'}
-
-        adj = {v.index: [e.other_vert(v).index for e in v.link_edges] for v in bm.verts}
-        parent_map, visited, found_cycle = _bfs_tree(adj, root_vert.index)
-
-        if active.index not in visited:
-            self.report({'WARNING'}, "Active vertex is not reachable from root.")
-            return {'CANCELLED'}
-        if found_cycle:
-            self.report({'WARNING'}, "Cycle detected in mesh graph.")
-
-        children_map = {v: [] for v in parent_map}
+        children_map = {}
         for child, par in parent_map.items():
             if par is not None:
-                children_map[par].append(child)
+                children_map.setdefault(par, []).append(child)
 
         child_chain = set()
-        stack = deque(children_map.get(active.index, []))
-        while stack:
-            v = stack.popleft()
-            if v not in child_chain:
-                child_chain.add(v)
-                stack.extend(children_map.get(v, []))
+        queue = deque(children_map.get(active.index, []))
+        while queue:
+            v = queue.popleft()
+            child_chain.add(v)
+            queue.extend(children_map.get(v, []))
 
         if not child_chain:
             self.report({'INFO'}, "No child vertices found from active vertex.")
@@ -666,34 +686,11 @@ class BSphereSelectParentChain(bpy.types.Operator):
         return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
 
     def execute(self, context):
+        result = _get_chain_graph(self, context)
+        if result is None:
+            return {'CANCELLED'}
+        bm, parent_map, active = result
         obj = context.active_object
-        bm = bmesh.from_edit_mesh(obj.data)
-        bm.verts.ensure_lookup_table()
-
-        skin_layers = bm.verts.layers.skin
-        if not skin_layers:
-            self.report({'WARNING'}, "No skin layer found.")
-            return {'CANCELLED'}
-        skin_layer = skin_layers[0]
-
-        root_vert = next((v for v in bm.verts if v[skin_layer].use_root), None)
-        if root_vert is None:
-            self.report({'WARNING'}, "No skin root marked. Mark a vertex as root first.")
-            return {'CANCELLED'}
-
-        active = bm.select_history.active
-        if not isinstance(active, bmesh.types.BMVert):
-            self.report({'WARNING'}, "No active vertex. Select a vertex first.")
-            return {'CANCELLED'}
-
-        adj = {v.index: [e.other_vert(v).index for e in v.link_edges] for v in bm.verts}
-        parent_map, visited, found_cycle = _bfs_tree(adj, root_vert.index)
-
-        if active.index not in visited:
-            self.report({'WARNING'}, "Active vertex is not reachable from root.")
-            return {'CANCELLED'}
-        if found_cycle:
-            self.report({'WARNING'}, "Cycle detected in mesh graph.")
 
         parent_chain = set()
         current = parent_map.get(active.index)
