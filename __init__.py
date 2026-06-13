@@ -17,6 +17,7 @@ import bpy
 from . bSpheres import *
 
 def register():
+    bpy.utils.register_class(BSpheresPreferences)
     bpy.utils.register_class(BSpheresSkinSettings)
     bpy.types.Object.bspheres_skin_settings = bpy.props.PointerProperty(
         type=BSpheresSkinSettings
@@ -47,6 +48,7 @@ def unregister():
     bpy.utils.unregister_class(AddBMesh)
     del bpy.types.Object.bspheres_skin_settings
     bpy.utils.unregister_class(BSpheresSkinSettings)
+    bpy.utils.unregister_class(BSpheresPreferences)
 
 if __name__ == '__main__':
     register()
