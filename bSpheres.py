@@ -386,15 +386,38 @@ def _get_chain_graph(operator, context):
     return bm, parent_map, active
 
 
-def _get_branch_geom(bm, parent_map, active_vert):
-    """Return (branch_bverts, branch_bedges) for the downstream branch from active_vert."""
+def _find_parent_edge_idx(bm, active_vert):
+    """Return the edge index connecting active_vert to its BFS parent, or -1 if none."""
+    skin_layers = bm.verts.layers.skin
+    if not skin_layers:
+        return -1
+    root_vert = next((v for v in bm.verts if v[skin_layers[0]].use_root), None)
+    if root_vert is None:
+        return -1
+    adj = {v.index: [e.other_vert(v).index for e in v.link_edges] for v in bm.verts}
+    parent_map, _ = _bfs_tree(adj, root_vert.index)
+    parent_idx = parent_map.get(active_vert.index)
+    if parent_idx is None:
+        return -1
+    bm.verts.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+    parent_bvert = bm.verts[parent_idx]
+    edge = next((e for e in active_vert.link_edges if e.other_vert(active_vert) == parent_bvert), None)
+    return edge.index if edge is not None else -1
+
+
+def _get_branch_geom(bm, parent_map, active_vert, exclude_root=False):
+    """Return (branch_bverts, branch_bedges) for the downstream branch from active_vert.
+    With exclude_root=True, active_vert itself is excluded so mirror/radial keep the
+    attachment point fixed instead of moving it to a disconnected position."""
     children_map = {}
     for child, par in parent_map.items():
         if par is not None:
             children_map.setdefault(par, []).append(child)
 
     branch_verts = set()
-    queue = deque([active_vert.index])
+    start_indices = children_map.get(active_vert.index, []) if exclude_root else [active_vert.index]
+    queue = deque(start_indices)
     while queue:
         v = queue.popleft()
         branch_verts.add(v)
@@ -818,11 +841,13 @@ class BSphereAssignNodeMesh(bpy.types.Operator):
 
         vert_idx = active.index
         bpy.ops.object.mode_set(mode='OBJECT')
-        attr = obj.data.attributes.get("bspheres_node_mesh")
-        if attr is None:
-            attr = obj.data.attributes.new("bspheres_node_mesh", 'STRING', 'POINT')
-        attr.data[vert_idx].value = mesh_name
-        bpy.ops.object.mode_set(mode='EDIT')
+        try:
+            attr = obj.data.attributes.get("bspheres_node_mesh")
+            if attr is None:
+                attr = obj.data.attributes.new("bspheres_node_mesh", 'STRING', 'POINT')
+            attr.data[vert_idx].value = mesh_name
+        finally:
+            bpy.ops.object.mode_set(mode='EDIT')
         return {'FINISHED'}
 
 
@@ -867,11 +892,13 @@ class BSphereAssignLinkMesh(bpy.types.Operator):
 
         edge_idx = edge.index
         bpy.ops.object.mode_set(mode='OBJECT')
-        attr = obj.data.attributes.get("bspheres_link_mesh")
-        if attr is None:
-            attr = obj.data.attributes.new("bspheres_link_mesh", 'STRING', 'EDGE')
-        attr.data[edge_idx].value = mesh_name
-        bpy.ops.object.mode_set(mode='EDIT')
+        try:
+            attr = obj.data.attributes.get("bspheres_link_mesh")
+            if attr is None:
+                attr = obj.data.attributes.new("bspheres_link_mesh", 'STRING', 'EDGE')
+            attr.data[edge_idx].value = mesh_name
+        finally:
+            bpy.ops.object.mode_set(mode='EDIT')
         return {'FINISHED'}
 
 
@@ -894,38 +921,22 @@ class BSphereClearInsertMesh(bpy.types.Operator):
             return {'CANCELLED'}
 
         vert_idx = active.index
-        edge_idx = None
-
-        skin_layers = bm.verts.layers.skin
-        if skin_layers:
-            root_vert = next((v for v in bm.verts if v[skin_layers[0]].use_root), None)
-            if root_vert is not None:
-                adj = {v.index: [e.other_vert(v).index for e in v.link_edges] for v in bm.verts}
-                parent_map, _ = _bfs_tree(adj, root_vert.index)
-                parent_idx = parent_map.get(active.index)
-                if parent_idx is not None:
-                    bm.verts.ensure_lookup_table()
-                    bm.edges.ensure_lookup_table()
-                    parent_bvert = bm.verts[parent_idx]
-                    edge = next(
-                        (e for e in active.link_edges if e.other_vert(active) == parent_bvert),
-                        None,
-                    )
-                    if edge is not None:
-                        edge_idx = edge.index
+        edge_idx = _find_parent_edge_idx(bm, active)
+        if edge_idx == -1:
+            edge_idx = None
 
         bpy.ops.object.mode_set(mode='OBJECT')
+        try:
+            attr_node = obj.data.attributes.get("bspheres_node_mesh")
+            if attr_node and vert_idx < len(attr_node.data):
+                attr_node.data[vert_idx].value = ""
 
-        attr_node = obj.data.attributes.get("bspheres_node_mesh")
-        if attr_node and vert_idx < len(attr_node.data):
-            attr_node.data[vert_idx].value = ""
-
-        if edge_idx is not None:
-            attr_edge = obj.data.attributes.get("bspheres_link_mesh")
-            if attr_edge and edge_idx < len(attr_edge.data):
-                attr_edge.data[edge_idx].value = ""
-
-        bpy.ops.object.mode_set(mode='EDIT')
+            if edge_idx is not None:
+                attr_edge = obj.data.attributes.get("bspheres_link_mesh")
+                if attr_edge and edge_idx < len(attr_edge.data):
+                    attr_edge.data[edge_idx].value = ""
+        finally:
+            bpy.ops.object.mode_set(mode='EDIT')
         return {'FINISHED'}
 
 
@@ -943,88 +954,88 @@ class BSphereRefreshInsertMeshes(bpy.types.Operator):
         obj = context.active_object
         previous_mode = context.mode
         bpy.ops.object.mode_set(mode='OBJECT')
+        try:
+            col = _ensure_collection("bSpheres_Inserts", context.scene)
 
-        col = _ensure_collection("bSpheres_Inserts", context.scene)
-
-        existing_node = {}
-        existing_edge = {}
-        for inst in list(col.objects):
-            if not inst.get("bspheres_insert") or inst.get("bspheres_source") != obj.name:
-                continue
-            vi = inst.get("bspheres_vert_idx")
-            ei = inst.get("bspheres_edge_idx")
-            if vi is not None:
-                existing_node[vi] = inst
-            elif ei is not None:
-                existing_edge[ei] = inst
-
-        live_verts = set()
-        attr_node = obj.data.attributes.get("bspheres_node_mesh")
-        if attr_node:
-            for i, vert in enumerate(obj.data.vertices):
-                mesh_name = attr_node.data[i].value
-                if not mesh_name:
+            existing_node = {}
+            existing_edge = {}
+            for inst in list(col.objects):
+                if not inst.get("bspheres_insert") or inst.get("bspheres_source") != obj.name:
                     continue
-                source_mesh_obj = bpy.data.objects.get(mesh_name)
-                if source_mesh_obj is None:
-                    self.report({'WARNING'}, f"Insert mesh '{mesh_name}' not found for vertex {i}.")
-                    continue
-                world_pos = obj.matrix_world @ vert.co
-                live_verts.add(i)
-                if i in existing_node:
-                    existing_node[i].location = world_pos
-                else:
-                    inst = source_mesh_obj.copy()
-                    inst["bspheres_insert"] = True
-                    inst["bspheres_source"] = obj.name
-                    inst["bspheres_vert_idx"] = i
-                    inst.location = world_pos
-                    col.objects.link(inst)
+                vi = inst.get("bspheres_vert_idx")
+                ei = inst.get("bspheres_edge_idx")
+                if vi is not None:
+                    existing_node[vi] = inst
+                elif ei is not None:
+                    existing_edge[ei] = inst
 
-        live_edges = set()
-        attr_edge = obj.data.attributes.get("bspheres_link_mesh")
-        if attr_edge:
-            for i, edge in enumerate(obj.data.edges):
-                mesh_name = attr_edge.data[i].value
-                if not mesh_name:
-                    continue
-                source_mesh_obj = bpy.data.objects.get(mesh_name)
-                if source_mesh_obj is None:
-                    self.report({'WARNING'}, f"Insert mesh '{mesh_name}' not found for edge {i}.")
-                    continue
-                v0 = obj.data.vertices[edge.vertices[0]].co
-                v1 = obj.data.vertices[edge.vertices[1]].co
-                midpoint = obj.matrix_world @ ((v0 + v1) / 2)
-                edge_vec = (obj.matrix_world.to_3x3() @ (v1 - v0)).normalized()
-                edge_len = (obj.matrix_world @ v1 - obj.matrix_world @ v0).length
-                up = mathutils.Vector((0.0, 0.0, 1.0))
-                rot = up.rotation_difference(edge_vec)
-                live_edges.add(i)
-                if i in existing_edge:
-                    inst = existing_edge[i]
-                    inst.location = midpoint
-                    inst.rotation_mode = 'QUATERNION'
-                    inst.rotation_quaternion = rot
-                    inst.scale = (1.0, 1.0, edge_len)
-                else:
-                    inst = source_mesh_obj.copy()
-                    inst["bspheres_insert"] = True
-                    inst["bspheres_source"] = obj.name
-                    inst["bspheres_edge_idx"] = i
-                    inst.location = midpoint
-                    inst.rotation_mode = 'QUATERNION'
-                    inst.rotation_quaternion = rot
-                    inst.scale = (1.0, 1.0, edge_len)
-                    col.objects.link(inst)
+            live_verts = set()
+            attr_node = obj.data.attributes.get("bspheres_node_mesh")
+            if attr_node:
+                for i, vert in enumerate(obj.data.vertices):
+                    mesh_name = attr_node.data[i].value
+                    if not mesh_name:
+                        continue
+                    source_mesh_obj = bpy.data.objects.get(mesh_name)
+                    if source_mesh_obj is None:
+                        self.report({'WARNING'}, f"Insert mesh '{mesh_name}' not found for vertex {i}.")
+                        continue
+                    world_pos = obj.matrix_world @ vert.co
+                    live_verts.add(i)
+                    if i in existing_node:
+                        existing_node[i].location = world_pos
+                    else:
+                        inst = source_mesh_obj.copy()
+                        inst["bspheres_insert"] = True
+                        inst["bspheres_source"] = obj.name
+                        inst["bspheres_vert_idx"] = i
+                        inst.location = world_pos
+                        col.objects.link(inst)
 
-        for vi, inst in existing_node.items():
-            if vi not in live_verts:
-                bpy.data.objects.remove(inst, do_unlink=True)
-        for ei, inst in existing_edge.items():
-            if ei not in live_edges:
-                bpy.data.objects.remove(inst, do_unlink=True)
+            live_edges = set()
+            attr_edge = obj.data.attributes.get("bspheres_link_mesh")
+            if attr_edge:
+                for i, edge in enumerate(obj.data.edges):
+                    mesh_name = attr_edge.data[i].value
+                    if not mesh_name:
+                        continue
+                    source_mesh_obj = bpy.data.objects.get(mesh_name)
+                    if source_mesh_obj is None:
+                        self.report({'WARNING'}, f"Insert mesh '{mesh_name}' not found for edge {i}.")
+                        continue
+                    v0 = obj.data.vertices[edge.vertices[0]].co
+                    v1 = obj.data.vertices[edge.vertices[1]].co
+                    midpoint = obj.matrix_world @ ((v0 + v1) / 2)
+                    edge_vec = (obj.matrix_world.to_3x3() @ (v1 - v0)).normalized()
+                    edge_len = (obj.matrix_world @ v1 - obj.matrix_world @ v0).length
+                    up = mathutils.Vector((0.0, 0.0, 1.0))
+                    rot = up.rotation_difference(edge_vec)
+                    live_edges.add(i)
+                    if i in existing_edge:
+                        inst = existing_edge[i]
+                        inst.location = midpoint
+                        inst.rotation_mode = 'QUATERNION'
+                        inst.rotation_quaternion = rot
+                        inst.scale = (1.0, 1.0, edge_len)
+                    else:
+                        inst = source_mesh_obj.copy()
+                        inst["bspheres_insert"] = True
+                        inst["bspheres_source"] = obj.name
+                        inst["bspheres_edge_idx"] = i
+                        inst.location = midpoint
+                        inst.rotation_mode = 'QUATERNION'
+                        inst.rotation_quaternion = rot
+                        inst.scale = (1.0, 1.0, edge_len)
+                        col.objects.link(inst)
 
-        bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
+            for vi, inst in existing_node.items():
+                if vi not in live_verts:
+                    bpy.data.objects.remove(inst, do_unlink=True)
+            for ei, inst in existing_edge.items():
+                if ei not in live_edges:
+                    bpy.data.objects.remove(inst, do_unlink=True)
+        finally:
+            bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
         return {'FINISHED'}
 
 
@@ -1087,7 +1098,10 @@ class BSpheresMirrorBranch(bpy.types.Operator):
         bm, parent_map, active_vert = result
         obj = context.active_object
 
-        branch_bverts, branch_bedges = _get_branch_geom(bm, parent_map, active_vert)
+        branch_bverts, branch_bedges = _get_branch_geom(bm, parent_map, active_vert, exclude_root=True)
+        if not branch_bverts:
+            self.report({'WARNING'}, "Active vertex has no children to mirror.")
+            return {'CANCELLED'}
         dup = bmesh.ops.duplicate(bm, geom=branch_bverts + branch_bedges)
 
         for elem in dup['geom']:
@@ -1140,7 +1154,10 @@ class BSpheresRadialDuplicate(bpy.types.Operator):
         bm, parent_map, active_vert = result
         obj = context.active_object
 
-        branch_bverts, branch_bedges = _get_branch_geom(bm, parent_map, active_vert)
+        branch_bverts, branch_bedges = _get_branch_geom(bm, parent_map, active_vert, exclude_root=True)
+        if not branch_bverts:
+            self.report({'WARNING'}, "Active vertex has no children to duplicate radially.")
+            return {'CANCELLED'}
         pivot = active_vert.co.copy()
         axis_vec = mathutils.Vector(
             (1.0, 0.0, 0.0) if self.axis == 'X' else
@@ -1245,6 +1262,9 @@ class BSpheresApplyPreset(bpy.types.Operator):
                 if mod:
                     mod.levels = val
             else:
+                if not hasattr(type(settings), key):
+                    self.report({'ERROR'}, f"BUG: unknown preset key '{key}'")
+                    return {'CANCELLED'}
                 setattr(settings, key, val)
         return {'FINISHED'}
 
