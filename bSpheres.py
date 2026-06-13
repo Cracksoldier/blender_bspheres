@@ -112,17 +112,19 @@ from bpy.props import (
 class BSpheresPreferences(bpy.types.AddonPreferences):
     bl_idname = __package__
 
-    default_mirror_x: bpy.props.BoolProperty(name="X", default=False)
-    default_mirror_y: bpy.props.BoolProperty(name="Y", default=True)
-    default_mirror_z: bpy.props.BoolProperty(name="Z", default=False)
+    default_mirror_axes: bpy.props.BoolVectorProperty(
+        name="Default Mirror Axes",
+        size=3,
+        default=(False, True, False),
+    )
 
     def draw(self, context):
         layout = self.layout
         layout.label(text="Default Mirror Axes on Create:")
         row = layout.row()
-        row.prop(self, "default_mirror_x", text="X")
-        row.prop(self, "default_mirror_y", text="Y")
-        row.prop(self, "default_mirror_z", text="Z")
+        row.prop(self, "default_mirror_axes", text="X", index=0)
+        row.prop(self, "default_mirror_axes", text="Y", index=1)
+        row.prop(self, "default_mirror_axes", text="Z", index=2)
 
 
 class AddBMesh(bpy.types.Operator):
@@ -206,12 +208,9 @@ class AddBMesh(bpy.types.Operator):
         bpy.ops.object.mode_set(mode='OBJECT')
         
         bpy.ops.object.modifier_add(type='MIRROR')
-        prefs = bpy.context.preferences.addons[__package__].preferences
-        bpy.context.object.modifiers["Mirror"].use_axis = (
-            prefs.default_mirror_x,
-            prefs.default_mirror_y,
-            prefs.default_mirror_z,
-        )
+        addon = bpy.context.preferences.addons.get(__package__)
+        mirror_axes = addon.preferences.default_mirror_axes if addon else (False, True, False)
+        bpy.context.object.modifiers["Mirror"].use_axis = tuple(mirror_axes)
         bpy.ops.object.modifier_add(type='SKIN')
         bpy.ops.object.modifier_add(type='SUBSURF')
         bpy.context.object.modifiers["Skin"].use_x_symmetry = False
