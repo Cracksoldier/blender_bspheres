@@ -15,6 +15,8 @@ import bpy
 import bmesh
 from bpy_extras.object_utils import AddObjectHelper
 from collections import deque
+import math
+import mathutils
 
 # Maps context.mode values (e.g. 'EDIT_MESH') to the values mode_set() accepts
 # (e.g. 'EDIT'). Anything not listed is assumed to already be a valid mode_set value.
@@ -384,6 +386,30 @@ def _get_chain_graph(operator, context):
     return bm, parent_map, active
 
 
+def _get_branch_geom(bm, parent_map, active_vert):
+    """Return (branch_bverts, branch_bedges) for the downstream branch from active_vert."""
+    children_map = {}
+    for child, par in parent_map.items():
+        if par is not None:
+            children_map.setdefault(par, []).append(child)
+
+    branch_verts = set()
+    queue = deque([active_vert.index])
+    while queue:
+        v = queue.popleft()
+        branch_verts.add(v)
+        queue.extend(children_map.get(v, []))
+
+    bm.verts.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+    branch_bverts = [bm.verts[i] for i in branch_verts]
+    branch_bedges = [
+        e for e in bm.edges
+        if e.verts[0].index in branch_verts and e.verts[1].index in branch_verts
+    ]
+    return branch_bverts, branch_bedges
+
+
 class MakeBSkin(bpy.types.Operator):
     """Create a new sculptable mesh from the bSphere control object without modifying it"""
     bl_idname = 'bspheres.make_bskin'
@@ -420,6 +446,17 @@ class MakeBSkin(bpy.types.Operator):
         return {"FINISHED"}
 
 
+_PRESET_ITEMS = [
+    ('ORGANIC_SMOOTH',    "Organic Smooth",    "Characters and creatures"),
+    ('HUMANOID_BASEMESH', "Humanoid Basemesh", "Human / creature body blockouts"),
+    ('CREATURE_LIMBS',    "Creature Limbs",    "Monsters, legs, horns, wings"),
+    ('TENTACLES',         "Tentacles",         "Long tapered shapes"),
+    ('HARD_MANNEQUIN',    "Hard Mannequin",    "Robots and mannequin blockouts"),
+    ('LOW_POLY_BLOCKOUT', "Low Poly Blockout", "Fast concepting"),
+    ('PRINT_SOLID',       "3D Print Solid",    "Printable miniatures"),
+]
+
+
 class BSpheresSkinSettings(bpy.types.PropertyGroup):
     voxel_size: bpy.props.FloatProperty(
         name="Voxel Size", default=0.02, min=0.001, max=1.0, step=0.1,
@@ -452,6 +489,20 @@ class BSpheresSkinSettings(bpy.types.PropertyGroup):
     min_branch_radius: bpy.props.FloatProperty(
         name="Min Radius", default=0.01, min=0.0001, max=1.0, step=0.01,
         description="Skin radius below which a warning is issued",
+    )
+    insert_node_mesh_name: bpy.props.StringProperty(
+        name="Node Mesh",
+        description="Mesh object to instance at this vertex",
+    )
+    insert_link_mesh_name: bpy.props.StringProperty(
+        name="Link Mesh",
+        description="Mesh object to instance along the edge to the parent vertex",
+    )
+    last_preset: bpy.props.EnumProperty(
+        name="Preset",
+        items=_PRESET_ITEMS,
+        default='ORGANIC_SMOOTH',
+        description="Output preset to apply",
     )
 
 
@@ -736,6 +787,468 @@ class BSphereSelectParentChain(bpy.types.Operator):
         return {'FINISHED'}
 
 
+# ── Feature 08: Insert Node & Link Meshes ────────────────────────────────────
+
+class BSphereAssignNodeMesh(bpy.types.Operator):
+    """Assign the selected mesh object as the insert mesh for the active vertex"""
+    bl_idname = 'bspheres.assign_node_mesh'
+    bl_label = 'Assign Node Mesh'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
+
+    def execute(self, context):
+        obj = context.active_object
+        settings = obj.bspheres_skin_settings
+        mesh_name = settings.insert_node_mesh_name
+        if not mesh_name:
+            self.report({'WARNING'}, "No mesh object selected in Node Mesh field.")
+            return {'CANCELLED'}
+        if bpy.data.objects.get(mesh_name) is None:
+            self.report({'WARNING'}, f"Object '{mesh_name}' not found.")
+            return {'CANCELLED'}
+
+        bm = bmesh.from_edit_mesh(obj.data)
+        active = bm.select_history.active
+        if not isinstance(active, bmesh.types.BMVert):
+            self.report({'WARNING'}, "No active vertex. Select a vertex first.")
+            return {'CANCELLED'}
+
+        vert_idx = active.index
+        bpy.ops.object.mode_set(mode='OBJECT')
+        attr = obj.data.attributes.get("bspheres_node_mesh")
+        if attr is None:
+            attr = obj.data.attributes.new("bspheres_node_mesh", 'STRING', 'POINT')
+        attr.data[vert_idx].value = mesh_name
+        bpy.ops.object.mode_set(mode='EDIT')
+        return {'FINISHED'}
+
+
+class BSphereAssignLinkMesh(bpy.types.Operator):
+    """Assign the selected mesh object as the insert mesh for the edge to the parent vertex"""
+    bl_idname = 'bspheres.assign_link_mesh'
+    bl_label = 'Assign Link Mesh'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
+
+    def execute(self, context):
+        obj = context.active_object
+        settings = obj.bspheres_skin_settings
+        mesh_name = settings.insert_link_mesh_name
+        if not mesh_name:
+            self.report({'WARNING'}, "No mesh object selected in Link Mesh field.")
+            return {'CANCELLED'}
+        if bpy.data.objects.get(mesh_name) is None:
+            self.report({'WARNING'}, f"Object '{mesh_name}' not found.")
+            return {'CANCELLED'}
+
+        result = _get_chain_graph(self, context)
+        if result is None:
+            return {'CANCELLED'}
+        bm, parent_map, active_vert = result
+
+        parent_idx = parent_map.get(active_vert.index)
+        if parent_idx is None:
+            self.report({'WARNING'}, "Active vertex is the root — no incoming edge to assign a link mesh to.")
+            return {'CANCELLED'}
+
+        bm.verts.ensure_lookup_table()
+        bm.edges.ensure_lookup_table()
+        parent_bvert = bm.verts[parent_idx]
+        edge = next((e for e in active_vert.link_edges if e.other_vert(active_vert) == parent_bvert), None)
+        if edge is None:
+            self.report({'ERROR'}, "Could not find the edge between active vertex and parent.")
+            return {'CANCELLED'}
+
+        edge_idx = edge.index
+        bpy.ops.object.mode_set(mode='OBJECT')
+        attr = obj.data.attributes.get("bspheres_link_mesh")
+        if attr is None:
+            attr = obj.data.attributes.new("bspheres_link_mesh", 'STRING', 'EDGE')
+        attr.data[edge_idx].value = mesh_name
+        bpy.ops.object.mode_set(mode='EDIT')
+        return {'FINISHED'}
+
+
+class BSphereClearInsertMesh(bpy.types.Operator):
+    """Clear the insert mesh assignment from the active vertex and its incoming edge"""
+    bl_idname = 'bspheres.clear_insert_mesh'
+    bl_label = 'Clear Insert Mesh'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
+
+    def execute(self, context):
+        obj = context.active_object
+        bm = bmesh.from_edit_mesh(obj.data)
+        active = bm.select_history.active
+        if not isinstance(active, bmesh.types.BMVert):
+            self.report({'WARNING'}, "No active vertex.")
+            return {'CANCELLED'}
+
+        vert_idx = active.index
+        edge_idx = None
+
+        skin_layers = bm.verts.layers.skin
+        if skin_layers:
+            root_vert = next((v for v in bm.verts if v[skin_layers[0]].use_root), None)
+            if root_vert is not None:
+                adj = {v.index: [e.other_vert(v).index for e in v.link_edges] for v in bm.verts}
+                parent_map, _ = _bfs_tree(adj, root_vert.index)
+                parent_idx = parent_map.get(active.index)
+                if parent_idx is not None:
+                    bm.verts.ensure_lookup_table()
+                    bm.edges.ensure_lookup_table()
+                    parent_bvert = bm.verts[parent_idx]
+                    edge = next(
+                        (e for e in active.link_edges if e.other_vert(active) == parent_bvert),
+                        None,
+                    )
+                    if edge is not None:
+                        edge_idx = edge.index
+
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        attr_node = obj.data.attributes.get("bspheres_node_mesh")
+        if attr_node and vert_idx < len(attr_node.data):
+            attr_node.data[vert_idx].value = ""
+
+        if edge_idx is not None:
+            attr_edge = obj.data.attributes.get("bspheres_link_mesh")
+            if attr_edge and edge_idx < len(attr_edge.data):
+                attr_edge.data[edge_idx].value = ""
+
+        bpy.ops.object.mode_set(mode='EDIT')
+        return {'FINISHED'}
+
+
+class BSphereRefreshInsertMeshes(bpy.types.Operator):
+    """Create or update insert mesh instances in the bSpheres_Inserts collection"""
+    bl_idname = 'bspheres.refresh_insert_meshes'
+    bl_label = 'Refresh Insert Meshes'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object)
+
+    def execute(self, context):
+        obj = context.active_object
+        previous_mode = context.mode
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        col = _ensure_collection("bSpheres_Inserts", context.scene)
+
+        existing_node = {}
+        existing_edge = {}
+        for inst in list(col.objects):
+            if not inst.get("bspheres_insert") or inst.get("bspheres_source") != obj.name:
+                continue
+            vi = inst.get("bspheres_vert_idx")
+            ei = inst.get("bspheres_edge_idx")
+            if vi is not None:
+                existing_node[vi] = inst
+            elif ei is not None:
+                existing_edge[ei] = inst
+
+        live_verts = set()
+        attr_node = obj.data.attributes.get("bspheres_node_mesh")
+        if attr_node:
+            for i, vert in enumerate(obj.data.vertices):
+                mesh_name = attr_node.data[i].value
+                if not mesh_name:
+                    continue
+                source_mesh_obj = bpy.data.objects.get(mesh_name)
+                if source_mesh_obj is None:
+                    self.report({'WARNING'}, f"Insert mesh '{mesh_name}' not found for vertex {i}.")
+                    continue
+                world_pos = obj.matrix_world @ vert.co
+                live_verts.add(i)
+                if i in existing_node:
+                    existing_node[i].location = world_pos
+                else:
+                    inst = source_mesh_obj.copy()
+                    inst["bspheres_insert"] = True
+                    inst["bspheres_source"] = obj.name
+                    inst["bspheres_vert_idx"] = i
+                    inst.location = world_pos
+                    col.objects.link(inst)
+
+        live_edges = set()
+        attr_edge = obj.data.attributes.get("bspheres_link_mesh")
+        if attr_edge:
+            for i, edge in enumerate(obj.data.edges):
+                mesh_name = attr_edge.data[i].value
+                if not mesh_name:
+                    continue
+                source_mesh_obj = bpy.data.objects.get(mesh_name)
+                if source_mesh_obj is None:
+                    self.report({'WARNING'}, f"Insert mesh '{mesh_name}' not found for edge {i}.")
+                    continue
+                v0 = obj.data.vertices[edge.vertices[0]].co
+                v1 = obj.data.vertices[edge.vertices[1]].co
+                midpoint = obj.matrix_world @ ((v0 + v1) / 2)
+                edge_vec = (obj.matrix_world.to_3x3() @ (v1 - v0)).normalized()
+                edge_len = (obj.matrix_world @ v1 - obj.matrix_world @ v0).length
+                up = mathutils.Vector((0.0, 0.0, 1.0))
+                rot = up.rotation_difference(edge_vec)
+                live_edges.add(i)
+                if i in existing_edge:
+                    inst = existing_edge[i]
+                    inst.location = midpoint
+                    inst.rotation_mode = 'QUATERNION'
+                    inst.rotation_quaternion = rot
+                    inst.scale = (1.0, 1.0, edge_len)
+                else:
+                    inst = source_mesh_obj.copy()
+                    inst["bspheres_insert"] = True
+                    inst["bspheres_source"] = obj.name
+                    inst["bspheres_edge_idx"] = i
+                    inst.location = midpoint
+                    inst.rotation_mode = 'QUATERNION'
+                    inst.rotation_quaternion = rot
+                    inst.scale = (1.0, 1.0, edge_len)
+                    col.objects.link(inst)
+
+        for vi, inst in existing_node.items():
+            if vi not in live_verts:
+                bpy.data.objects.remove(inst, do_unlink=True)
+        for ei, inst in existing_edge.items():
+            if ei not in live_edges:
+                bpy.data.objects.remove(inst, do_unlink=True)
+
+        bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
+        return {'FINISHED'}
+
+
+# ── Feature 09: Branch Duplicate, Mirror, Radial ─────────────────────────────
+
+class BSpheresDuplicateBranch(bpy.types.Operator):
+    """Duplicate the downstream branch from the active vertex"""
+    bl_idname = 'bspheres.duplicate_branch'
+    bl_label = 'Duplicate Branch'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
+
+    def execute(self, context):
+        result = _get_chain_graph(self, context)
+        if result is None:
+            return {'CANCELLED'}
+        bm, parent_map, active_vert = result
+        obj = context.active_object
+
+        branch_bverts, branch_bedges = _get_branch_geom(bm, parent_map, active_vert)
+        dup = bmesh.ops.duplicate(bm, geom=branch_bverts + branch_bedges)
+
+        for v in bm.verts:
+            v.select = False
+        for e in bm.edges:
+            e.select = False
+        for elem in dup['geom']:
+            if isinstance(elem, (bmesh.types.BMVert, bmesh.types.BMEdge)):
+                elem.select = True
+
+        bmesh.update_edit_mesh(obj.data)
+        return {'FINISHED'}
+
+
+class BSpheresMirrorBranch(bpy.types.Operator):
+    """Duplicate and mirror the downstream branch across the chosen axis (object-local space)"""
+    bl_idname = 'bspheres.mirror_branch'
+    bl_label = 'Mirror Branch'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    axis: EnumProperty(
+        name="Axis",
+        items=[('X', "X", "Mirror across the YZ plane"),
+               ('Y', "Y", "Mirror across the XZ plane"),
+               ('Z', "Z", "Mirror across the XY plane")],
+        default='X',
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
+
+    def execute(self, context):
+        result = _get_chain_graph(self, context)
+        if result is None:
+            return {'CANCELLED'}
+        bm, parent_map, active_vert = result
+        obj = context.active_object
+
+        branch_bverts, branch_bedges = _get_branch_geom(bm, parent_map, active_vert)
+        dup = bmesh.ops.duplicate(bm, geom=branch_bverts + branch_bedges)
+
+        for elem in dup['geom']:
+            if isinstance(elem, bmesh.types.BMVert):
+                if self.axis == 'X':
+                    elem.co.x = -elem.co.x
+                elif self.axis == 'Y':
+                    elem.co.y = -elem.co.y
+                else:
+                    elem.co.z = -elem.co.z
+
+        for v in bm.verts:
+            v.select = False
+        for e in bm.edges:
+            e.select = False
+        for elem in dup['geom']:
+            if isinstance(elem, (bmesh.types.BMVert, bmesh.types.BMEdge)):
+                elem.select = True
+
+        bmesh.update_edit_mesh(obj.data)
+        return {'FINISHED'}
+
+
+class BSpheresRadialDuplicate(bpy.types.Operator):
+    """Duplicate the downstream branch radially around the active vertex"""
+    bl_idname = 'bspheres.radial_duplicate'
+    bl_label = 'Radial Duplicate'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    count: bpy.props.IntProperty(
+        name="Count", min=2, max=32, default=4,
+        description="Total number of copies including the original",
+    )
+    axis: EnumProperty(
+        name="Axis",
+        items=[('X', "X", "Rotate around the X axis"),
+               ('Y', "Y", "Rotate around the Y axis"),
+               ('Z', "Z", "Rotate around the Z axis")],
+        default='Z',
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
+
+    def execute(self, context):
+        result = _get_chain_graph(self, context)
+        if result is None:
+            return {'CANCELLED'}
+        bm, parent_map, active_vert = result
+        obj = context.active_object
+
+        branch_bverts, branch_bedges = _get_branch_geom(bm, parent_map, active_vert)
+        pivot = active_vert.co.copy()
+        axis_vec = mathutils.Vector(
+            (1.0, 0.0, 0.0) if self.axis == 'X' else
+            (0.0, 1.0, 0.0) if self.axis == 'Y' else
+            (0.0, 0.0, 1.0)
+        )
+
+        all_new = []
+        for i in range(1, self.count):
+            angle = (2.0 * math.pi / self.count) * i
+            rot = mathutils.Matrix.Rotation(angle, 4, axis_vec)
+            dup = bmesh.ops.duplicate(bm, geom=branch_bverts + branch_bedges)
+            for elem in dup['geom']:
+                if isinstance(elem, bmesh.types.BMVert):
+                    elem.co = rot @ (elem.co - pivot) + pivot
+            all_new.extend(dup['geom'])
+
+        for v in bm.verts:
+            v.select = False
+        for e in bm.edges:
+            e.select = False
+        for elem in all_new:
+            if isinstance(elem, (bmesh.types.BMVert, bmesh.types.BMEdge)):
+                elem.select = True
+
+        bmesh.update_edit_mesh(obj.data)
+        return {'FINISHED'}
+
+
+# ── Feature 10: Output Presets ───────────────────────────────────────────────
+
+class BSpheresApplyPreset(bpy.types.Operator):
+    """Apply a bSkin output preset to the active bSphere"""
+    bl_idname = 'bspheres.apply_preset'
+    bl_label = 'Apply Preset'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    PRESETS = {
+        'ORGANIC_SMOOTH': {
+            'use_voxel_remesh': True,  'voxel_size': 0.02,
+            'use_smooth_shading': True, 'use_merge_doubles': True,
+            'merge_threshold': 0.001,  'use_recalc_normals': True,
+            'warn_thin_branches': True, 'min_branch_radius': 0.01,
+            '_subdivision_levels': 3,
+        },
+        'HUMANOID_BASEMESH': {
+            'use_voxel_remesh': True,  'voxel_size': 0.02,
+            'use_smooth_shading': True, 'use_merge_doubles': True,
+            'merge_threshold': 0.001,  'use_recalc_normals': True,
+            'warn_thin_branches': True, 'min_branch_radius': 0.01,
+            '_subdivision_levels': 2,
+        },
+        'CREATURE_LIMBS': {
+            'use_voxel_remesh': True,  'voxel_size': 0.015,
+            'use_smooth_shading': True, 'use_merge_doubles': True,
+            'merge_threshold': 0.0005, 'use_recalc_normals': True,
+            'warn_thin_branches': True, 'min_branch_radius': 0.005,
+            '_subdivision_levels': 3,
+        },
+        'TENTACLES': {
+            'use_voxel_remesh': True,  'voxel_size': 0.015,
+            'use_smooth_shading': True, 'use_merge_doubles': False,
+            'use_recalc_normals': True, 'warn_thin_branches': True,
+            'min_branch_radius': 0.003, '_subdivision_levels': 4,
+        },
+        'HARD_MANNEQUIN': {
+            'use_voxel_remesh': False, 'use_smooth_shading': False,
+            'use_merge_doubles': True, 'merge_threshold': 0.001,
+            'use_recalc_normals': False, 'warn_thin_branches': False,
+            '_subdivision_levels': 2,
+        },
+        'LOW_POLY_BLOCKOUT': {
+            'use_voxel_remesh': False, 'use_smooth_shading': False,
+            'use_merge_doubles': False, 'use_recalc_normals': False,
+            'warn_thin_branches': False, '_subdivision_levels': 1,
+        },
+        'PRINT_SOLID': {
+            'use_voxel_remesh': True,  'voxel_size': 0.008,
+            'use_smooth_shading': True, 'use_merge_doubles': True,
+            'merge_threshold': 0.0001, 'use_recalc_normals': True,
+            'warn_thin_branches': True, 'min_branch_radius': 0.005,
+            '_subdivision_levels': 3,
+        },
+    }
+
+    preset: EnumProperty(
+        name="Preset",
+        items=_PRESET_ITEMS,
+        default='ORGANIC_SMOOTH',
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object)
+
+    def execute(self, context):
+        obj = context.active_object
+        settings = obj.bspheres_skin_settings
+        for key, val in self.PRESETS[self.preset].items():
+            if key == '_subdivision_levels':
+                mod = next((m for m in obj.modifiers if m.type == 'SUBSURF'), None)
+                if mod:
+                    mod.levels = val
+            else:
+                setattr(settings, key, val)
+        return {'FINISHED'}
+
+
 class BSpheresPanel(bpy.types.Panel):
     bl_idname = 'OBJECT_PT_bSpheres_Panel'
     bl_label = 'bSpheres NX'
@@ -783,6 +1296,10 @@ class BSpheresPanel(bpy.types.Panel):
                     layout.label(text="bSkin Settings:")
                     box = layout.column(align=True)
                     row = box.row(align=True)
+                    row.prop(settings, "last_preset", text="")
+                    op = row.operator("bspheres.apply_preset", text="Apply")
+                    op.preset = settings.last_preset
+                    row = box.row(align=True)
                     row.prop(settings, "use_voxel_remesh", text="Remesh")
                     row.prop(settings, "voxel_size", text="Size")
                     box.prop(settings, "use_smooth_shading", text="Shade Smooth")
@@ -805,6 +1322,7 @@ class BSpheresPanel(bpy.types.Panel):
 
                     layout.label(text="Armature:")
                     layout.operator("bspheres.generate_armature", text="Generate Armature")
+                    layout.operator("bspheres.refresh_insert_meshes", text="Refresh Insert Meshes")
 
                     if context.mode == 'EDIT_MESH':
                         bm = bmesh.from_edit_mesh(obj.data)
@@ -821,10 +1339,31 @@ class BSpheresPanel(bpy.types.Panel):
                             row2 = box2.row(align=True)
                             row2.operator("bspheres.mark_preserve", text="Mark Preserve")
                             row2.operator("bspheres.clear_preserve", text="Clear Preserve")
+                            layout.label(text="Insert Meshes:")
+                            box3 = layout.column(align=True)
+                            row3a = box3.row(align=True)
+                            row3a.prop_search(settings, "insert_node_mesh_name", bpy.data, "objects", text="Node")
+                            row3a.operator("bspheres.assign_node_mesh", text="Set")
+                            row3b = box3.row(align=True)
+                            row3b.prop_search(settings, "insert_link_mesh_name", bpy.data, "objects", text="Link")
+                            row3b.operator("bspheres.assign_link_mesh", text="Set")
+                            box3.operator("bspheres.clear_insert_mesh", text="Clear Active Node")
                             layout.label(text="Chain Selection:")
                             row3 = layout.row(align=True)
                             row3.operator("bspheres.select_child_chain", text="Select Children")
                             row3.operator("bspheres.select_parent_chain", text="Select Parents")
+                            layout.label(text="Branch Tools:")
+                            box4 = layout.column(align=True)
+                            box4.operator("bspheres.duplicate_branch", text="Duplicate Branch")
+                            row4 = box4.row(align=True)
+                            row4.label(text="Mirror:")
+                            op4 = row4.operator("bspheres.mirror_branch", text="X")
+                            op4.axis = 'X'
+                            op4 = row4.operator("bspheres.mirror_branch", text="Y")
+                            op4.axis = 'Y'
+                            op4 = row4.operator("bspheres.mirror_branch", text="Z")
+                            op4.axis = 'Z'
+                            box4.operator("bspheres.radial_duplicate", text="Radial Duplicate")
 
                 split = layout.split()
                 col = split.column()
