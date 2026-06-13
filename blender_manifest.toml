@@ -2,9 +2,9 @@ schema_version = "1.0.0"
 
 id = "bspheres"
 version = "1.1.0"
-name = "bSpheres"
-tagline = "zSpheres-style base mesh creation"
-maintainer = "Abinadi Cordova"
+name = "bSpheres NX"
+tagline = "zSpheres-style base mesh creation — upgraded"
+maintainer = "Cracksoldier"
 
 type = "add-on"
 

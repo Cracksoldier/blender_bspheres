@@ -1,4 +1,4 @@
-# bSpheres
+# bSpheres NX
 
 > **Fork notice:** This is a fork of [PapaTemporal/blender_bspheres](https://github.com/PapaTemporal/blender_bspheres), updated for Blender 4.2 LTS and newer.
 
@@ -7,7 +7,7 @@ Simulate zBrush-style **zSpheres** in Blender for fast base-mesh creation.
 zBrush has a handy tool called zSpheres for blocking out quick base meshes. Blender
 has been able to do the same thing for a long time, but the setup was fiddly: you'd
 create a single-vertex mesh, then stack three modifiers (Mirror, Skin, Subdivision
-Surface) before you could extrude vertices and get the zSphere effect. **bSpheres**
+Surface) before you could extrude vertices and get the zSphere effect. **bSpheres NX**
 wraps all of that behind a single panel so you can just start sketching.
 
 ## Compatibility
@@ -23,16 +23,16 @@ distributable zip with Blender's command-line tools:
 
 ```sh
 blender --command extension validate .
-blender --command extension build      # produces bspheres-<version>.zip
+blender --command extension build      # produces bspheres-nx-<version>.zip
 ```
 
 Then in Blender: **Edit → Preferences → Get Extensions → Install from Disk…**, pick
-the generated zip, and enable **bSpheres**. (For quick local development you can also
+the generated zip, and enable **bSpheres NX**. (For quick local development you can also
 drop the folder into your Blender extensions directory and use *Reload Scripts*.)
 
 ## Usage
 
-Once enabled, a **bSpheres** tab appears in the 3D Viewport sidebar (press <kbd>N</kbd>
+Once enabled, a **bSpheres NX** tab appears in the 3D Viewport sidebar (press <kbd>N</kbd>
 to open it).
 
 1. **Create** — builds the single-vertex mesh with the Mirror, Skin, and Subdivision
