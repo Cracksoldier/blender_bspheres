@@ -28,10 +28,16 @@ def register():
     bpy.utils.register_class(DeleteBSkinPreview)
     bpy.utils.register_class(BSphereMarkPreserve)
     bpy.utils.register_class(BSphereClearPreserve)
+    bpy.utils.register_class(GenerateBSphereArmature)
+    bpy.utils.register_class(BSphereSelectChildChain)
+    bpy.utils.register_class(BSphereSelectParentChain)
     bpy.utils.register_class(BSpheresPanel)
 
 def unregister():
     bpy.utils.unregister_class(BSpheresPanel)
+    bpy.utils.unregister_class(BSphereSelectParentChain)
+    bpy.utils.unregister_class(BSphereSelectChildChain)
+    bpy.utils.unregister_class(GenerateBSphereArmature)
     bpy.utils.unregister_class(BSphereClearPreserve)
     bpy.utils.unregister_class(BSphereMarkPreserve)
     bpy.utils.unregister_class(DeleteBSkinPreview)
