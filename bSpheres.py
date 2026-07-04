@@ -1274,13 +1274,13 @@ class BSphereRefreshInsertMeshes(bpy.types.Operator):
             for kind, i, source_mesh_obj, matrix in _iter_insert_placements(self, obj):
                 existing = existing_node if kind == 'VERT' else existing_edge
                 (live_verts if kind == 'VERT' else live_edges).add(i)
-                if i in existing:
-                    inst = existing[i]
-                    # Re-point the instance in case the assignment changed
-                    # since it was created.
-                    inst.data = source_mesh_obj.data
-                    inst.matrix_world = matrix
-                else:
+                inst = existing.get(i)
+                if inst is not None and inst.data != source_mesh_obj.data:
+                    # Reassigned to a different source: rebuild the instance so it
+                    # picks up the new source's modifiers, not just its mesh data.
+                    bpy.data.objects.remove(inst, do_unlink=True)
+                    inst = None
+                if inst is None:
                     inst = source_mesh_obj.copy()
                     inst["bspheres_insert"] = True
                     inst["bspheres_source"] = obj.name
@@ -1289,7 +1289,19 @@ class BSphereRefreshInsertMeshes(bpy.types.Operator):
                     else:
                         inst["bspheres_edge_idx"] = i
                     col.objects.link(inst)
-                    inst.matrix_world = matrix
+                if kind == 'VERT':
+                    # Update only the position so manual rotation/scale tweaks
+                    # on node instances survive a refresh.
+                    inst.location = matrix.translation
+                else:
+                    # Assign decomposed quaternion channels rather than
+                    # matrix_world — an Euler decomposition near the ±90°
+                    # singularity gimbal-locks if the instance is keyframed.
+                    loc, rot, sca = matrix.decompose()
+                    inst.rotation_mode = 'QUATERNION'
+                    inst.location = loc
+                    inst.rotation_quaternion = rot
+                    inst.scale = sca
 
             for vi, inst in existing_node.items():
                 if vi not in live_verts:
