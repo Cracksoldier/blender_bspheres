@@ -428,14 +428,26 @@ def _find_parent_edge_idx(bm, active_vert):
     return edge.index if edge is not None else -1
 
 
-def _get_branch_geom(bm, parent_map, active_vert, exclude_root=False):
-    """Return (branch_bverts, branch_bedges) for the downstream branch from active_vert.
-    With exclude_root=True, active_vert itself is excluded so mirror/radial keep the
-    attachment point fixed instead of moving it to a disconnected position."""
+def _build_children_map(parent_map):
+    """Invert a BFS parent_map into {parent_index: [child_index, …]}."""
     children_map = {}
     for child, par in parent_map.items():
         if par is not None:
             children_map.setdefault(par, []).append(child)
+    return children_map
+
+
+def _direct_child_verts(bm, parent_map, parent_idx):
+    """Return the BMVerts whose BFS parent is parent_idx. The lookup table must be
+    fresh (callers get this via _bfs_from_root)."""
+    return [bm.verts[c] for c, p in parent_map.items() if p == parent_idx]
+
+
+def _get_branch_geom(bm, parent_map, active_vert, exclude_root=False):
+    """Return (branch_bverts, branch_bedges) for the downstream branch from active_vert.
+    With exclude_root=True, active_vert itself is excluded so mirror/radial keep the
+    attachment point fixed instead of moving it to a disconnected position."""
+    children_map = _build_children_map(parent_map)
 
     branch_verts = set()
     start_indices = children_map.get(active_vert.index, []) if exclude_root else [active_vert.index]
@@ -492,8 +504,7 @@ class MakeBSkin(bpy.types.Operator):
             _warn_thin_branches(self, source_obj, settings)
 
         new_obj = _bake_bskin_object(context, source_obj)
-        if settings.use_include_inserts:
-            _join_inserts(self, context, new_obj, list(_iter_insert_placements(self, source_obj)))
+        _maybe_join_inserts(self, context, new_obj, source_obj)
 
         _apply_bskin_settings(new_obj, settings, context)
         bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
@@ -519,8 +530,7 @@ class MakeRiggedBSkin(bpy.types.Operator):
             _warn_thin_branches(self, source_obj, settings)
 
         new_obj = _bake_bskin_object(context, source_obj)
-        if settings.use_include_inserts:
-            _join_inserts(self, context, new_obj, list(_iter_insert_placements(self, source_obj)))
+        _maybe_join_inserts(self, context, new_obj, source_obj)
         _apply_bskin_settings(new_obj, settings, context)
 
         arm_obj = _generate_armature_object(self, context, source_obj, include_mirrored=True)
@@ -662,8 +672,7 @@ class PreviewBSkin(bpy.types.Operator):
             preview_obj.matrix_world = source_obj.matrix_world.copy()
             col.objects.link(preview_obj)
 
-        if settings.use_include_inserts:
-            _join_inserts(self, context, preview_obj, list(_iter_insert_placements(self, source_obj)))
+        _maybe_join_inserts(self, context, preview_obj, source_obj)
         _apply_bskin_settings(preview_obj, source_obj.bspheres_skin_settings, context)
         bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
         return {"FINISHED"}
@@ -843,52 +852,48 @@ def _generate_armature_object(operator, context, obj, include_mirrored=True):
         arm_obj.select_set(True)
         bpy.ops.object.mode_set(mode='EDIT')
 
-        bone_refs = {}
-        for child_idx, par_idx in parent_map.items():
-            if par_idx is None:
-                continue
-            head = obj.matrix_world @ local_positions[par_idx]
-            tail = obj.matrix_world @ local_positions[child_idx]
-            if (tail - head).length < 1e-6:
-                operator.report({'WARNING'}, f"Skipping zero-length edge {par_idx}→{child_idx}.")
-                continue
-            bone = arm_data.edit_bones.new(f"bone_{par_idx}_{child_idx}")
-            bone.head = head
-            bone.tail = tail
-            bone_refs[child_idx] = (bone, par_idx)
-
-        for child_idx, (bone, par_idx) in bone_refs.items():
-            if par_idx in bone_refs:
-                bone.parent = bone_refs[par_idx][0]
-            elif par_idx != root_idx:
-                operator.report(
-                    {'WARNING'},
-                    f"Bone for vertex {child_idx} is disconnected — "
-                    f"its parent edge to vertex {par_idx} was skipped.",
-                )
-
-        # Mirrored bone sets. Edges lying entirely on the mirror plane(s) are
-        # skipped — their copy would coincide with the original bone.
-        for combo in mirror_combos:
-            suffix = '.m' + ''.join('XYZ'[i] for i in combo)
+        # One bone set per combo; the empty combo () is the unmirrored base set.
+        # Edges lying entirely on the mirror plane(s) are skipped for mirrored
+        # combos — their copy would coincide with the base bone.
+        refs_by_combo = {}
+        for combo in [()] + mirror_combos:
+            suffix = ('.m' + ''.join('XYZ'[i] for i in combo)) if combo else ''
             combo_refs = {}
-            for child_idx, (bone, par_idx) in bone_refs.items():
+            for child_idx, par_idx in parent_map.items():
+                if par_idx is None:
+                    continue
                 head_l = mirrored(local_positions[par_idx], combo)
                 tail_l = mirrored(local_positions[child_idx], combo)
-                if ((head_l - local_positions[par_idx]).length < 1e-6
-                        and (tail_l - local_positions[child_idx]).length < 1e-6):
+                if combo and ((head_l - local_positions[par_idx]).length < 1e-6
+                              and (tail_l - local_positions[child_idx]).length < 1e-6):
                     continue
-                mbone = arm_data.edit_bones.new(bone.name + suffix)
-                mbone.head = obj.matrix_world @ head_l
-                mbone.tail = obj.matrix_world @ tail_l
-                combo_refs[child_idx] = (mbone, par_idx)
-            for child_idx, (mbone, par_idx) in combo_refs.items():
+                head = obj.matrix_world @ head_l
+                tail = obj.matrix_world @ tail_l
+                if (tail - head).length < 1e-6:
+                    if not combo:
+                        operator.report({'WARNING'}, f"Skipping zero-length edge {par_idx}→{child_idx}.")
+                    continue
+                bone = arm_data.edit_bones.new(f"bone_{par_idx}_{child_idx}{suffix}")
+                bone.head = head
+                bone.tail = tail
+                combo_refs[child_idx] = (bone, par_idx)
+            refs_by_combo[combo] = combo_refs
+
+        base_refs = refs_by_combo[()]
+        for combo, combo_refs in refs_by_combo.items():
+            for child_idx, (bone, par_idx) in combo_refs.items():
                 if par_idx in combo_refs:
-                    mbone.parent = combo_refs[par_idx][0]
-                elif par_idx in bone_refs:
+                    bone.parent = combo_refs[par_idx][0]
+                elif combo and par_idx in base_refs:
                     # The parent edge lies on the mirror plane — hang the
-                    # mirrored chain off the original (shared) bone.
-                    mbone.parent = bone_refs[par_idx][0]
+                    # mirrored chain off the base (shared) bone.
+                    bone.parent = base_refs[par_idx][0]
+                elif not combo and par_idx != root_idx:
+                    operator.report(
+                        {'WARNING'},
+                        f"Bone for vertex {child_idx} is disconnected — "
+                        f"its parent edge to vertex {par_idx} was skipped.",
+                    )
 
         bpy.ops.object.mode_set(mode='OBJECT')
     finally:
@@ -953,10 +958,7 @@ class BSphereSelectChildChain(bpy.types.Operator):
         bm, parent_map, active = result
         obj = context.active_object
 
-        children_map = {}
-        for child, par in parent_map.items():
-            if par is not None:
-                children_map.setdefault(par, []).append(child)
+        children_map = _build_children_map(parent_map)
 
         child_chain = set()
         queue = deque(children_map.get(active.index, []))
@@ -1239,6 +1241,16 @@ def _join_inserts(operator, context, target_obj, placements):
         context.view_layer.objects.active = prev_active
 
 
+def _maybe_join_inserts(operator, context, target_obj, source_obj):
+    """Join source_obj's insert meshes into target_obj when use_include_inserts is
+    on. Reads assignments live from source_obj, so the destructive Apply path
+    cannot use this — it must collect placements before modifier apply and call
+    _join_inserts directly."""
+    if source_obj.bspheres_skin_settings.use_include_inserts:
+        _join_inserts(operator, context, target_obj,
+                      list(_iter_insert_placements(operator, source_obj)))
+
+
 class BSphereRefreshInsertMeshes(bpy.types.Operator):
     """Create or update insert mesh instances in the bSpheres_Inserts collection.
     Instances are matched by vertex/edge index, so refresh after topology edits"""
@@ -1379,7 +1391,7 @@ class BSpheresMirrorBranch(bpy.types.Operator):
             return {'CANCELLED'}
         # Resolve the direct children before duplicating — the lookup table is
         # invalidated once new geometry is added.
-        child_verts = [bm.verts[c] for c, p in parent_map.items() if p == active_vert.index]
+        child_verts = _direct_child_verts(bm, parent_map, active_vert.index)
         dup = bmesh.ops.duplicate(bm, geom=branch_bverts + branch_bedges)
 
         for elem in dup['geom']:
@@ -1453,7 +1465,7 @@ class BSpheresRadialDuplicate(bpy.types.Operator):
         )
         # Resolve the direct children before duplicating — the lookup table is
         # invalidated once new geometry is added.
-        child_verts = [bm.verts[c] for c, p in parent_map.items() if p == active_vert.index]
+        child_verts = _direct_child_verts(bm, parent_map, active_vert.index)
 
         all_new = []
         for i in range(1, self.count):
@@ -1505,10 +1517,7 @@ class BSphereTaperBranch(bpy.types.Operator):
         bm, parent_map, active_vert = result
         obj = context.active_object
 
-        children_map = {}
-        for child, par in parent_map.items():
-            if par is not None:
-                children_map.setdefault(par, []).append(child)
+        children_map = _build_children_map(parent_map)
 
         # Geometric path distance from the active vertex, so unevenly spaced
         # joints still taper smoothly.
