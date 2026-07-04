@@ -57,12 +57,18 @@ to open it).
    - **Recalculate Normals** — run "Recalculate Outside" on the baked mesh to fix
      flipped normals (off by default; the Skin modifier usually produces consistent
      normals already).
+   - **Include Inserts** — join the assigned insert meshes (see **Refresh Insert
+     Meshes**) into the baked output before remeshing, so voxel remesh unifies
+     everything into one watertight mesh (off by default).
    - **Warn Thin Branches / Min Radius** — emit a warning for any vertex whose skin
      radius falls below the minimum (default 0.01). Vertices in the
      `bspheres_preserve` group are exempt. The warning fires during **Make bSkin**
      and **Preview / Refresh**.
 7. **Selected Node** (Edit Mode only) — when a vertex is active, shows its live skin
    radius and root/loose flags, plus buttons:
+   - **Set Radius** — opens a dialog pre-filled with the active vertex's skin radius;
+     type exact X/Y values to apply them to all selected vertices (instead of
+     eyeballing <kbd>Ctrl</kbd>+<kbd>A</kbd>).
    - **Mark Preserve** — adds the selected vertex to the `bspheres_preserve` group,
      exempting it from the thin-branch warning.
    - **Clear Preserve** — removes the selected vertex from that group.
@@ -84,24 +90,31 @@ to open it).
      - **Radial Duplicate** — creates rotated copies of the downstream branch around
        the chosen axis through the active vertex, each connected back to the active
        vertex. Count (default 4) and axis are adjustable in the operator redo panel.
+     - **Taper Branch** — interpolates skin radii from the active vertex down to an
+       end radius at the branch tips (by distance along the branch). The end radius
+       is adjustable in the operator redo panel. Great for tails, tentacles, horns.
 8. **Generate Armature** — creates a Blender armature from the bSphere control mesh.
    Each edge becomes one bone; bones are parented to mirror the vertex graph. The skin
    root vertex (set with **Mark Root**) determines the root bone. The armature is placed
-   in a `bSpheres_Armatures` collection. Only the unmirrored half of the mesh is
-   included — add an Armature Mirror modifier afterwards if needed.
+   in a `bSpheres_Armatures` collection. Bones for the mirrored halves are generated
+   too (matching the Mirror modifier's enabled axes); untick **Include Mirrored Half**
+   in the redo panel to get only the unmirrored half.
 9. **Refresh Insert Meshes** — creates or updates instances of the assigned insert
    meshes in a `bSpheres_Inserts` collection: node meshes are placed at their vertex,
    link meshes at the edge midpoint, aligned along the edge (local +Z) and stretched
    to its length. Instances are matched by vertex/edge index, so click Refresh again
-   after topology edits. Insert meshes are visual kitbash helpers — they are not
-   merged into Make bSkin / Preview / Apply output.
+   after topology edits. By default insert meshes are visual kitbash helpers; enable
+   **Include Inserts** in bSkin Settings to merge them into baked output.
 10. **Preview / Refresh** — non-destructive on-demand preview. Creates a temporary mesh
     in a `bSpheres_Preview` collection. Re-clicking updates it in-place so the Outliner
     stays clean. Use **Delete** to remove it.
 11. **Make bSkin** — non-destructive permanent bake. Creates a new plain mesh object in a
     `bSpheres_Output` collection without touching the control structure. Each run produces
     a fresh output object named `bSkin…`.
-12. **Apply** — destructive bake. Applies all three modifiers directly onto the control
+12. **Make Rigged bSkin** — the full pipeline in one click: bakes a bSkin, generates the
+    full-skeleton armature, and binds the mesh to it with automatic weights. The result
+    is ready to pose.
+13. **Apply** — destructive bake. Applies all three modifiers directly onto the control
     object, then post-processes using the same bSkin Settings (remesh, smooth, cleanup).
     Use this when you are done iterating.
 

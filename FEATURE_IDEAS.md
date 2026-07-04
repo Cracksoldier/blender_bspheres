@@ -1,41 +1,24 @@
 # Feature ideas
 
 Candidate features for future releases, grouped by how naturally they extend the
-existing code. The ones at the top reuse existing infrastructure almost entirely;
-the ones at the bottom are bigger commitments.
+existing code.
 
-## Completing existing features (low effort, high payoff)
+## Shipped (July 2026)
 
-1. **Full-skeleton armature generation.** The biggest documented limitation:
-   `GenerateBSphereArmature` only covers the unmirrored half. After building the
-   bones, read the Mirror modifier's `use_axis` and run `bpy.ops.armature.symmetrize`
-   (naming bones `bone_x_y.L` so Blender's symmetrize picks them up), or mirror the
-   `world_positions` directly and emit the second half in the same edit session.
-   This turns the armature feature from "starting point" into "done".
+Former ideas 1–5, now implemented:
 
-2. **One-click Rig & Skin.** The addon already generates both the baked mesh and the
-   armature — a "Make Rigged bSkin" operator could run `MakeBSkin`, then
-   `GenerateBSphereArmature`, then parent the output with automatic weights
-   (`parent_set(type='ARMATURE_AUTO')`). That's the complete zSpheres pipeline
-   (sketch → mesh → posed rig) in one button.
-
-3. **Merge inserts into the bake.** Insert meshes are currently visual-only (a
-   documented limitation). An option in `BSpheresSkinSettings` like "Include Inserts
-   in Bake" could duplicate the instances and join them into the output object before
-   `_apply_bskin_settings` runs — voxel remesh then unifies them into one watertight
-   mesh for free, which is exactly how zBrush mesh insertion feels.
-
-4. **Editable skin radius in the panel.** The "Selected Node" section displays the
-   radius read-only from `bm.verts.layers.skin`. Making it editable (an operator with
-   two `FloatProperty`s writing back to the layer, or a slider) would let users type
-   exact radii instead of eyeballing Ctrl+A.
+1. **Full-skeleton armature generation** — mirrored bone sets per Mirror-modifier
+   axis subset, with an `include_mirrored` redo-panel toggle.
+2. **One-click Rig & Skin** — `Make Rigged bSkin` bakes, generates the armature,
+   and binds with automatic weights.
+3. **Merge inserts into the bake** — `Include Inserts` bSkin setting joins insert
+   meshes into all bake paths before remeshing.
+4. **Editable skin radius** — `Set Radius` dialog writes exact X/Y radii to all
+   selected vertices.
+5. **Taper Branch** — interpolates skin radii from the active vertex to an end
+   radius at the branch tips, by distance along the branch.
 
 ## Branch/radius tools (medium effort, builds on `_get_chain_graph`)
-
-5. **Taper Branch.** Walk the downstream chain from the active vertex (via
-   `_get_branch_geom`) and interpolate skin radii linearly from the active vertex's
-   radius to a target end radius. Perfect for tails, tentacles, horns — currently the
-   most tedious thing to do by hand.
 
 6. **Rotate Branch.** Select-children + rotate is possible manually, but a dedicated
    operator with the pivot locked to the active vertex's *parent* joint would behave
@@ -74,10 +57,4 @@ the ones at the bottom are bigger commitments.
 12. **Named branches → named bones.** Let users tag the active vertex with a label
     (string attribute, same pattern as `bspheres_node_mesh`), then have armature
     generation name bones `spine`, `arm.L`, etc. instead of `bone_3_7`. Pairs well
-    with #1 since `.L`/`.R` suffixes drive symmetrize.
-
-## Suggested next release
-
-**1 + 2** make the strongest single theme ("complete rigging pipeline"), with **4**
-as the quality-of-life addition — all three stay inside patterns the code already
-has (`try/finally` edit sessions, `_get_chain_graph`, the skin layer).
+    with full-skeleton generation since `.L`/`.R` suffixes aid symmetry tooling.
