@@ -81,6 +81,13 @@ class applyBSphereModifiers(bpy.types.Operator):
     def execute(self, context):
         obj = context.object
         bpy.ops.object.mode_set(mode='OBJECT')
+        settings = obj.bspheres_skin_settings
+
+        # Collect insert placements before the modifiers are applied — applying
+        # them rebuilds the mesh and destroys the per-vertex/edge attributes.
+        insert_placements = (
+            list(_iter_insert_placements(self, obj)) if settings.use_include_inserts else []
+        )
 
         # Apply by modifier type, not by the default names ("Mirror"/"Skin"/
         # "Subdivision"): Blender suffixes duplicates with ".001" if the object
@@ -93,7 +100,7 @@ class applyBSphereModifiers(bpy.types.Operator):
         space = context.space_data
         if space and space.type == 'VIEW_3D':
             space.shading.show_xray = False
-        settings = obj.bspheres_skin_settings
+        _join_inserts(self, context, obj, insert_placements)
         if settings.use_voxel_remesh:
             obj.data.remesh_voxel_size = settings.voxel_size
             bpy.ops.object.voxel_remesh()
@@ -485,6 +492,8 @@ class MakeBSkin(bpy.types.Operator):
             _warn_thin_branches(self, source_obj, settings)
 
         new_obj = _bake_bskin_object(context, source_obj)
+        if settings.use_include_inserts:
+            _join_inserts(self, context, new_obj, list(_iter_insert_placements(self, source_obj)))
 
         _apply_bskin_settings(new_obj, settings, context)
         bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
@@ -510,6 +519,8 @@ class MakeRiggedBSkin(bpy.types.Operator):
             _warn_thin_branches(self, source_obj, settings)
 
         new_obj = _bake_bskin_object(context, source_obj)
+        if settings.use_include_inserts:
+            _join_inserts(self, context, new_obj, list(_iter_insert_placements(self, source_obj)))
         _apply_bskin_settings(new_obj, settings, context)
 
         arm_obj = _generate_armature_object(self, context, source_obj, include_mirrored=True)
@@ -577,6 +588,10 @@ class BSpheresSkinSettings(bpy.types.PropertyGroup):
     use_recalc_normals: bpy.props.BoolProperty(
         name="Recalculate Normals", default=False,
         description="Recalculate normals outward after baking",
+    )
+    use_include_inserts: bpy.props.BoolProperty(
+        name="Include Inserts", default=False,
+        description="Join assigned insert meshes into the baked output before remeshing",
     )
     warn_thin_branches: bpy.props.BoolProperty(
         name="Warn Thin Branches", default=True,
@@ -647,6 +662,8 @@ class PreviewBSkin(bpy.types.Operator):
             preview_obj.matrix_world = source_obj.matrix_world.copy()
             col.objects.link(preview_obj)
 
+        if settings.use_include_inserts:
+            _join_inserts(self, context, preview_obj, list(_iter_insert_placements(self, source_obj)))
         _apply_bskin_settings(preview_obj, source_obj.bspheres_skin_settings, context)
         bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
         return {"FINISHED"}
@@ -1089,6 +1106,90 @@ class BSphereClearInsertMesh(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def _iter_insert_placements(operator, obj):
+    """Yield (kind, index, source_obj, matrix_world) for every valid insert-mesh
+    assignment on obj: kind 'VERT' places at the vertex (keeping the source
+    object's world rotation/scale), kind 'EDGE' aligns local +Z along the edge and
+    stretches to its length. Reports warnings for missing/non-mesh assignments and
+    zero-length edges. Must be called in OBJECT mode (reads the RNA mesh layer)."""
+    attr_node = obj.data.attributes.get("bspheres_node_mesh")
+    if attr_node:
+        for i, vert in enumerate(obj.data.vertices):
+            mesh_name = attr_node.data[i].value
+            if not mesh_name:
+                continue
+            source_mesh_obj = bpy.data.objects.get(mesh_name)
+            if source_mesh_obj is None or source_mesh_obj.type != 'MESH':
+                operator.report({'WARNING'}, f"Insert mesh '{mesh_name}' for vertex {i} is missing or not a mesh.")
+                continue
+            matrix = source_mesh_obj.matrix_world.copy()
+            matrix.translation = obj.matrix_world @ vert.co
+            yield 'VERT', i, source_mesh_obj, matrix
+
+    attr_edge = obj.data.attributes.get("bspheres_link_mesh")
+    if attr_edge:
+        for i, edge in enumerate(obj.data.edges):
+            mesh_name = attr_edge.data[i].value
+            if not mesh_name:
+                continue
+            source_mesh_obj = bpy.data.objects.get(mesh_name)
+            if source_mesh_obj is None or source_mesh_obj.type != 'MESH':
+                operator.report({'WARNING'}, f"Insert mesh '{mesh_name}' for edge {i} is missing or not a mesh.")
+                continue
+            v0 = obj.data.vertices[edge.vertices[0]].co
+            v1 = obj.data.vertices[edge.vertices[1]].co
+            if (v1 - v0).length < 1e-6:
+                operator.report({'WARNING'}, f"Skipping zero-length edge {i}.")
+                continue
+            midpoint = obj.matrix_world @ ((v0 + v1) / 2)
+            edge_vec = (obj.matrix_world.to_3x3() @ (v1 - v0)).normalized()
+            edge_len = (obj.matrix_world @ v1 - obj.matrix_world @ v0).length
+            up = mathutils.Vector((0.0, 0.0, 1.0))
+            rot = up.rotation_difference(edge_vec)
+            matrix = (mathutils.Matrix.Translation(midpoint)
+                      @ rot.to_matrix().to_4x4()
+                      @ mathutils.Matrix.Diagonal((1.0, 1.0, edge_len, 1.0)))
+            yield 'EDGE', i, source_mesh_obj, matrix
+
+
+def _join_inserts(operator, context, target_obj, placements):
+    """Join evaluated copies of the given insert placements into target_obj.
+    Must be called in OBJECT mode; selection/active are saved and restored.
+    No-ops when placements is empty."""
+    if not placements:
+        return
+    depsgraph = context.evaluated_depsgraph_get()
+    baked = []
+    for kind, i, source_mesh_obj, matrix in placements:
+        eval_obj = source_mesh_obj.evaluated_get(depsgraph)
+        mesh = bpy.data.meshes.new_from_object(eval_obj, depsgraph=depsgraph)
+        baked.append((mesh, matrix))
+
+    target_col = target_obj.users_collection[0]
+    temp_objs = []
+    for mesh, matrix in baked:
+        tmp = bpy.data.objects.new("bspheres_insert_tmp", mesh)
+        target_col.objects.link(tmp)
+        tmp.matrix_world = matrix
+        temp_objs.append(tmp)
+
+    prev_active = context.view_layer.objects.active
+    prev_selected = list(context.selected_objects)
+    try:
+        for o in prev_selected:
+            o.select_set(False)
+        for t in temp_objs:
+            t.select_set(True)
+        target_obj.select_set(True)
+        context.view_layer.objects.active = target_obj
+        bpy.ops.object.join()
+    finally:
+        target_obj.select_set(False)
+        for o in prev_selected:
+            o.select_set(True)
+        context.view_layer.objects.active = prev_active
+
+
 class BSphereRefreshInsertMeshes(bpy.types.Operator):
     """Create or update insert mesh instances in the bSpheres_Inserts collection.
     Instances are matched by vertex/edge index, so refresh after topology edits"""
@@ -1120,71 +1221,26 @@ class BSphereRefreshInsertMeshes(bpy.types.Operator):
                     existing_edge[ei] = inst
 
             live_verts = set()
-            attr_node = obj.data.attributes.get("bspheres_node_mesh")
-            if attr_node:
-                for i, vert in enumerate(obj.data.vertices):
-                    mesh_name = attr_node.data[i].value
-                    if not mesh_name:
-                        continue
-                    source_mesh_obj = bpy.data.objects.get(mesh_name)
-                    if source_mesh_obj is None or source_mesh_obj.type != 'MESH':
-                        self.report({'WARNING'}, f"Insert mesh '{mesh_name}' for vertex {i} is missing or not a mesh.")
-                        continue
-                    world_pos = obj.matrix_world @ vert.co
-                    live_verts.add(i)
-                    if i in existing_node:
-                        inst = existing_node[i]
-                        # Re-point the instance in case the assignment changed
-                        # since it was created.
-                        inst.data = source_mesh_obj.data
-                        inst.location = world_pos
-                    else:
-                        inst = source_mesh_obj.copy()
-                        inst["bspheres_insert"] = True
-                        inst["bspheres_source"] = obj.name
-                        inst["bspheres_vert_idx"] = i
-                        inst.location = world_pos
-                        col.objects.link(inst)
-
             live_edges = set()
-            attr_edge = obj.data.attributes.get("bspheres_link_mesh")
-            if attr_edge:
-                for i, edge in enumerate(obj.data.edges):
-                    mesh_name = attr_edge.data[i].value
-                    if not mesh_name:
-                        continue
-                    source_mesh_obj = bpy.data.objects.get(mesh_name)
-                    if source_mesh_obj is None or source_mesh_obj.type != 'MESH':
-                        self.report({'WARNING'}, f"Insert mesh '{mesh_name}' for edge {i} is missing or not a mesh.")
-                        continue
-                    v0 = obj.data.vertices[edge.vertices[0]].co
-                    v1 = obj.data.vertices[edge.vertices[1]].co
-                    if (v1 - v0).length < 1e-6:
-                        self.report({'WARNING'}, f"Skipping zero-length edge {i}.")
-                        continue
-                    midpoint = obj.matrix_world @ ((v0 + v1) / 2)
-                    edge_vec = (obj.matrix_world.to_3x3() @ (v1 - v0)).normalized()
-                    edge_len = (obj.matrix_world @ v1 - obj.matrix_world @ v0).length
-                    up = mathutils.Vector((0.0, 0.0, 1.0))
-                    rot = up.rotation_difference(edge_vec)
-                    live_edges.add(i)
-                    if i in existing_edge:
-                        inst = existing_edge[i]
-                        inst.data = source_mesh_obj.data
-                        inst.location = midpoint
-                        inst.rotation_mode = 'QUATERNION'
-                        inst.rotation_quaternion = rot
-                        inst.scale = (1.0, 1.0, edge_len)
+            for kind, i, source_mesh_obj, matrix in _iter_insert_placements(self, obj):
+                existing = existing_node if kind == 'VERT' else existing_edge
+                (live_verts if kind == 'VERT' else live_edges).add(i)
+                if i in existing:
+                    inst = existing[i]
+                    # Re-point the instance in case the assignment changed
+                    # since it was created.
+                    inst.data = source_mesh_obj.data
+                    inst.matrix_world = matrix
+                else:
+                    inst = source_mesh_obj.copy()
+                    inst["bspheres_insert"] = True
+                    inst["bspheres_source"] = obj.name
+                    if kind == 'VERT':
+                        inst["bspheres_vert_idx"] = i
                     else:
-                        inst = source_mesh_obj.copy()
-                        inst["bspheres_insert"] = True
-                        inst["bspheres_source"] = obj.name
                         inst["bspheres_edge_idx"] = i
-                        inst.location = midpoint
-                        inst.rotation_mode = 'QUATERNION'
-                        inst.rotation_quaternion = rot
-                        inst.scale = (1.0, 1.0, edge_len)
-                        col.objects.link(inst)
+                    col.objects.link(inst)
+                    inst.matrix_world = matrix
 
             for vi, inst in existing_node.items():
                 if vi not in live_verts:
@@ -1508,6 +1564,7 @@ class BSpheresPanel(bpy.types.Panel):
                     sub.active = settings.use_merge_doubles
                     sub.prop(settings, "merge_threshold", text="Dist")
                     box.prop(settings, "use_recalc_normals", text="Recalculate Normals")
+                    box.prop(settings, "use_include_inserts", text="Include Inserts")
                     row = box.row(align=True)
                     row.prop(settings, "warn_thin_branches", text="Warn Thin Branches")
                     sub = row.row()
