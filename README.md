@@ -84,7 +84,11 @@ to open it).
    - **Include Inserts** — join the assigned insert meshes (see **Refresh Insert
      Meshes**) into the baked output before remeshing, so voxel remesh unifies
      everything into one watertight mesh (off by default). Manual transform tweaks
-     you've made to the instances in `bSpheres_Inserts` are respected by the bake.
+     you've made to the instances in `bSpheres_Inserts` are respected by the bake
+     and follow their joint when you move it. Two caveats: reassigning a different
+     mesh without refreshing discards the tweak (a warning is reported), and
+     modifier edits made on an instance copy are not baked — the assigned source
+     object's modifiers are.
    - **Warn Thin Branches / Min Radius** — emit a warning for any vertex whose skin
      radius falls below the minimum (default 0.01). Vertices in the
      `bspheres_preserve` group are exempt. The warning fires during **Make bSkin**
@@ -128,8 +132,10 @@ to open it).
    meshes in a `bSpheres_Inserts` collection: node meshes are placed at their vertex,
    link meshes at the edge midpoint, aligned along the edge (local +Z) and stretched
    to its length. Instances are matched by vertex/edge index, so click Refresh again
-   after topology edits. By default insert meshes are visual kitbash helpers; enable
-   **Include Inserts** in bSkin Settings to merge them into baked output.
+   after topology edits. Manual tweaks you make to an instance (move/rotate/scale)
+   are stored relative to its joint and survive refreshes. By default insert meshes
+   are visual kitbash helpers; enable **Include Inserts** in bSkin Settings to merge
+   them into baked output.
 10. **Preview / Refresh** — non-destructive on-demand preview. Creates a temporary mesh
     in a `bSpheres_Preview` collection. Re-clicking updates it in-place so the Outliner
     stays clean. Use **Delete** to remove it.

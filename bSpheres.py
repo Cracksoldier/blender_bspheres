@@ -1016,6 +1016,23 @@ class BSphereSelectParentChain(bpy.types.Operator):
 
 # ── Feature 08: Insert Node & Link Meshes ────────────────────────────────────
 
+def _get_string_attr(data_item):
+    """Read a STRING attribute value as str — Blender 4.5+ exposes it as bytes,
+    4.2 LTS as str."""
+    value = data_item.value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return value
+
+
+def _set_string_attr(data_item, text):
+    """Write a STRING attribute value — Blender 4.5+ expects bytes, 4.2 LTS str."""
+    try:
+        data_item.value = text
+    except TypeError:
+        data_item.value = text.encode("utf-8")
+
+
 def _validate_insert_mesh(operator, control_obj, mesh_name, field_label):
     """Validate an insert-mesh assignment target. Reports a warning and returns
     False if the name is empty, the object is missing, it is not a mesh, or it
@@ -1068,7 +1085,7 @@ class BSphereAssignNodeMesh(bpy.types.Operator):
             attr = obj.data.attributes.get("bspheres_node_mesh")
             if attr is None:
                 attr = obj.data.attributes.new("bspheres_node_mesh", 'STRING', 'POINT')
-            attr.data[vert_idx].value = mesh_name
+            _set_string_attr(attr.data[vert_idx], mesh_name)
         finally:
             bpy.ops.object.mode_set(mode='EDIT')
         return {'FINISHED'}
@@ -1111,7 +1128,7 @@ class BSphereAssignLinkMesh(bpy.types.Operator):
             attr = obj.data.attributes.get("bspheres_link_mesh")
             if attr is None:
                 attr = obj.data.attributes.new("bspheres_link_mesh", 'STRING', 'EDGE')
-            attr.data[edge_idx].value = mesh_name
+            _set_string_attr(attr.data[edge_idx], mesh_name)
         finally:
             bpy.ops.object.mode_set(mode='EDIT')
         return {'FINISHED'}
@@ -1146,12 +1163,12 @@ class BSphereClearInsertMesh(bpy.types.Operator):
         try:
             attr_node = obj.data.attributes.get("bspheres_node_mesh")
             if attr_node and vert_idx < len(attr_node.data):
-                attr_node.data[vert_idx].value = ""
+                _set_string_attr(attr_node.data[vert_idx], "")
 
             if edge_idx is not None:
                 attr_edge = obj.data.attributes.get("bspheres_link_mesh")
                 if attr_edge and edge_idx < len(attr_edge.data):
-                    attr_edge.data[edge_idx].value = ""
+                    _set_string_attr(attr_edge.data[edge_idx], "")
         finally:
             bpy.ops.object.mode_set(mode='EDIT')
         return {'FINISHED'}
@@ -1177,6 +1194,65 @@ def _find_insert_instances(source_name):
     return existing_node, existing_edge
 
 
+_COMPUTED_MATRIX_PROP = "bspheres_computed_matrix"
+
+
+def _store_computed_matrix(inst, matrix):
+    """Record the computed placement on the instance so later refreshes and bakes
+    can tell a deliberate user tweak apart from mere staleness."""
+    inst[_COMPUTED_MATRIX_PROP] = [v for row in matrix for v in row]
+
+
+def _get_stored_computed_matrix(inst):
+    vals = inst.get(_COMPUTED_MATRIX_PROP)
+    if vals is None or len(vals) != 16:
+        return None
+    vals = list(vals)
+    return mathutils.Matrix((vals[0:4], vals[4:8], vals[8:12], vals[12:16]))
+
+
+def _matrices_close(a, b):
+    """Element-wise comparison with combined absolute+relative tolerance —
+    matrix_world channels are float32-backed, so exact or 1e-6 comparison would
+    misclassify decompose/recompose round-trips as tweaks."""
+    return all(
+        abs(a[i][j] - b[i][j]) <= 1e-4 + 1e-4 * abs(b[i][j])
+        for i in range(4) for j in range(4)
+    )
+
+
+def _resolve_instance_matrix(inst, computed):
+    """Final world matrix for an instance given its freshly computed placement.
+    Returns None when the instance has no stored baseline (created before the
+    baseline mechanism existed) — the caller keeps the legacy behavior.
+    Untweaked (the instance still matches its baseline) resolves to the computed
+    placement, so the instance follows the geometry. Tweaked resolves to the
+    computed placement with the user's delta re-applied in the placement's local
+    frame, so the tweak rides the joint: a rotation stays about the instance's
+    own pivot and an offset follows the edge's direction."""
+    stored = _get_stored_computed_matrix(inst)
+    if stored is None:
+        return None
+    if _matrices_close(inst.matrix_world, stored):
+        return computed.copy()
+    delta = stored.inverted(mathutils.Matrix.Identity(4)) @ inst.matrix_world
+    return computed @ delta
+
+
+def _apply_instance_matrix(inst, kind, matrix):
+    """EDGE instances get decomposed quaternion channels (an Euler decomposition
+    near the ±90° singularity gimbal-locks if the instance is later keyframed);
+    VERT instances take the matrix directly."""
+    if kind == 'EDGE':
+        loc, rot, sca = matrix.decompose()
+        inst.rotation_mode = 'QUATERNION'
+        inst.location = loc
+        inst.rotation_quaternion = rot
+        inst.scale = sca
+    else:
+        inst.matrix_world = matrix
+
+
 def _iter_insert_placements(operator, obj):
     """Yield (kind, index, source_obj, matrix_world) for every valid insert-mesh
     assignment on obj: kind 'VERT' places at the vertex (keeping the source
@@ -1186,7 +1262,7 @@ def _iter_insert_placements(operator, obj):
     attr_node = obj.data.attributes.get("bspheres_node_mesh")
     if attr_node:
         for i, vert in enumerate(obj.data.vertices):
-            mesh_name = attr_node.data[i].value
+            mesh_name = _get_string_attr(attr_node.data[i])
             if not mesh_name:
                 continue
             source_mesh_obj = bpy.data.objects.get(mesh_name)
@@ -1200,7 +1276,7 @@ def _iter_insert_placements(operator, obj):
     attr_edge = obj.data.attributes.get("bspheres_link_mesh")
     if attr_edge:
         for i, edge in enumerate(obj.data.edges):
-            mesh_name = attr_edge.data[i].value
+            mesh_name = _get_string_attr(attr_edge.data[i])
             if not mesh_name:
                 continue
             source_mesh_obj = bpy.data.objects.get(mesh_name)
@@ -1224,23 +1300,36 @@ def _iter_insert_placements(operator, obj):
 
 
 def _collect_insert_placements(operator, source_obj):
-    """Placements for baking: computed transforms, overridden by the live
-    instance's matrix_world where a matching instance exists in bSpheres_Inserts —
-    so manual position/rotation/scale tweaks on instances carry into the bake.
+    """Placements for baking, resolved against the live instances in
+    bSpheres_Inserts via _resolve_instance_matrix: untweaked instances follow the
+    current geometry, tweaked instances keep their delta riding the placement.
     A stale instance (assignment changed without a refresh) keeps the computed
-    transform. Must be called in OBJECT mode."""
+    transform and is reported. Note the bake evaluates the assigned source
+    object's modifiers — modifier edits made on an instance copy are not baked.
+    Must be called in OBJECT mode."""
     existing_node, existing_edge = _find_insert_instances(source_obj.name)
     placements = []
     for kind, i, source_mesh_obj, matrix in _iter_insert_placements(operator, source_obj):
         inst = (existing_node if kind == 'VERT' else existing_edge).get(i)
-        if inst is not None and inst.data == source_mesh_obj.data:
-            matrix = inst.matrix_world.copy()
+        if inst is not None:
+            if inst.data == source_mesh_obj.data:
+                resolved = _resolve_instance_matrix(inst, matrix)
+                # Legacy instance without a baseline: its matrix wins, as before.
+                matrix = inst.matrix_world.copy() if resolved is None else resolved
+            else:
+                operator.report(
+                    {'WARNING'},
+                    f"Insert instance for {kind.lower()} {i} is stale (assignment "
+                    f"changed without a refresh) — using the computed placement.",
+                )
         placements.append((kind, i, source_mesh_obj, matrix))
     return placements
 
 
 def _join_inserts(operator, context, target_obj, placements):
     """Join evaluated copies of the given insert placements into target_obj.
+    Each placement's *source object* is evaluated through the depsgraph, so the
+    source's modifiers apply but modifier edits on instance copies do not.
     Must be called in OBJECT mode; selection/active are saved and restored.
     No-ops when placements is empty."""
     if not placements:
@@ -1317,7 +1406,8 @@ class BSphereRefreshInsertMeshes(bpy.types.Operator):
                     # picks up the new source's modifiers, not just its mesh data.
                     bpy.data.objects.remove(inst, do_unlink=True)
                     inst = None
-                if inst is None:
+                created = inst is None
+                if created:
                     inst = source_mesh_obj.copy()
                     inst["bspheres_insert"] = True
                     inst["bspheres_source"] = obj.name
@@ -1326,19 +1416,22 @@ class BSphereRefreshInsertMeshes(bpy.types.Operator):
                     else:
                         inst["bspheres_edge_idx"] = i
                     col.objects.link(inst)
-                if kind == 'VERT':
-                    # Update only the position so manual rotation/scale tweaks
-                    # on node instances survive a refresh.
-                    inst.location = matrix.translation
+
+                if created:
+                    final = matrix
                 else:
-                    # Assign decomposed quaternion channels rather than
-                    # matrix_world — an Euler decomposition near the ±90°
-                    # singularity gimbal-locks if the instance is keyframed.
-                    loc, rot, sca = matrix.decompose()
-                    inst.rotation_mode = 'QUATERNION'
-                    inst.location = loc
-                    inst.rotation_quaternion = rot
-                    inst.scale = sca
+                    final = _resolve_instance_matrix(inst, matrix)
+                    if final is None:
+                        # Legacy instance without a baseline: apply the
+                        # pre-baseline behavior once; the baseline stored below
+                        # upgrades it for the next refresh.
+                        if kind == 'VERT':
+                            inst.location = matrix.translation
+                        else:
+                            final = matrix
+                if final is not None:
+                    _apply_instance_matrix(inst, kind, final)
+                _store_computed_matrix(inst, matrix)
 
             for vi, inst in existing_node.items():
                 if vi not in live_verts:
