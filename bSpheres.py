@@ -1471,6 +1471,65 @@ class BSpheresRadialDuplicate(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class BSphereTaperBranch(bpy.types.Operator):
+    """Taper skin radii from the active vertex down to an end radius at the branch tips"""
+    bl_idname = 'bspheres.taper_branch'
+    bl_label = 'Taper Branch'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    end_radius: FloatProperty(
+        name="End Radius", default=0.01, min=0.0001, max=1.0,
+        description="Skin radius at the farthest vertex of the branch",
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
+
+    def execute(self, context):
+        result = _get_chain_graph(self, context)
+        if result is None:
+            return {'CANCELLED'}
+        bm, parent_map, active_vert = result
+        obj = context.active_object
+
+        children_map = {}
+        for child, par in parent_map.items():
+            if par is not None:
+                children_map.setdefault(par, []).append(child)
+
+        # Geometric path distance from the active vertex, so unevenly spaced
+        # joints still taper smoothly.
+        bm.verts.ensure_lookup_table()
+        dist = {active_vert.index: 0.0}
+        queue = deque([active_vert.index])
+        while queue:
+            v_idx = queue.popleft()
+            v_co = bm.verts[v_idx].co
+            for c in children_map.get(v_idx, []):
+                dist[c] = dist[v_idx] + (bm.verts[c].co - v_co).length
+                queue.append(c)
+        del dist[active_vert.index]  # the active vertex keeps its radius
+
+        if not dist:
+            self.report({'INFO'}, "No child vertices found from active vertex.")
+            return {'FINISHED'}
+
+        layer = bm.verts.layers.skin[0]
+        start = active_vert[layer].radius
+        start = (start[0], start[1])
+        max_dist = max(dist.values())
+        for v_idx, d in dist.items():
+            t = d / max_dist if max_dist > 0 else 1.0
+            bm.verts[v_idx][layer].radius = (
+                start[0] + (self.end_radius - start[0]) * t,
+                start[1] + (self.end_radius - start[1]) * t,
+            )
+
+        bmesh.update_edit_mesh(obj.data)
+        return {'FINISHED'}
+
+
 # ── Feature 10: Output Presets ───────────────────────────────────────────────
 
 class BSpheresApplyPreset(bpy.types.Operator):
@@ -1672,6 +1731,7 @@ class BSpheresPanel(bpy.types.Panel):
                             op4 = row4.operator("bspheres.mirror_branch", text="Z")
                             op4.axis = 'Z'
                             box4.operator("bspheres.radial_duplicate", text="Radial Duplicate")
+                            box4.operator("bspheres.taper_branch", text="Taper Branch")
 
                 split = layout.split()
                 col = split.column()
