@@ -45,6 +45,10 @@ to open it).
 5. **Viewport** — how much to subdivide the skin. Higher = smoother preview.
 6. **bSkin Settings** — per-object output controls (only shown for bSphere control
    objects):
+   - **Preset + Apply** — pick one of seven output presets (Organic Smooth, Humanoid
+     Basemesh, Creature Limbs, Tentacles, Hard Mannequin, Low Poly Blockout, 3D Print
+     Solid) and click **Apply** to set all of the settings below — plus the Subdivision
+     level — in one go. You can still tweak individual settings afterwards.
    - **Remesh / Size** — toggle voxel remesh on/off and set the voxel size (default
      0.02). Smaller = finer mesh, slower to compute.
    - **Shade Smooth** — automatically set smooth shading on baked output.
@@ -66,18 +70,38 @@ to open it).
      (away from the skin root). Useful for posing a limb or tail as a unit.
    - **Select Parents** — selects all vertices upstream of the active vertex back to
      the skin root. Useful for selecting the spine leading to a joint.
+   - **Assign Insert Meshes (Node / Link + Set)** — assign any mesh object in the
+     scene to the active vertex (**Node**) or to the edge leading toward its parent
+     (**Link**). **Clear Active Node** removes both assignments. The instances are
+     created by **Refresh Insert Meshes** (see below). The target must be a mesh
+     object other than the bSphere control object itself.
+   - **Branch Tools**:
+     - **Duplicate Branch** — duplicates the active vertex and everything downstream
+       of it. The copy is left selected so you can move it into place with <kbd>G</kbd>.
+     - **Mirror X / Y / Z** — duplicates everything downstream of the active vertex,
+       mirrors it across the chosen axis (object-local space), and connects the
+       mirrored branch back to the active vertex.
+     - **Radial Duplicate** — creates rotated copies of the downstream branch around
+       the chosen axis through the active vertex, each connected back to the active
+       vertex. Count (default 4) and axis are adjustable in the operator redo panel.
 8. **Generate Armature** — creates a Blender armature from the bSphere control mesh.
    Each edge becomes one bone; bones are parented to mirror the vertex graph. The skin
    root vertex (set with **Mark Root**) determines the root bone. The armature is placed
    in a `bSpheres_Armatures` collection. Only the unmirrored half of the mesh is
    included — add an Armature Mirror modifier afterwards if needed.
-9. **Preview / Refresh** — non-destructive on-demand preview. Creates a temporary mesh
-   in a `bSpheres_Preview` collection. Re-clicking updates it in-place so the Outliner
-   stays clean. Use **Delete** to remove it.
-10. **Make bSkin** — non-destructive permanent bake. Creates a new plain mesh object in a
+9. **Refresh Insert Meshes** — creates or updates instances of the assigned insert
+   meshes in a `bSpheres_Inserts` collection: node meshes are placed at their vertex,
+   link meshes at the edge midpoint, aligned along the edge (local +Z) and stretched
+   to its length. Instances are matched by vertex/edge index, so click Refresh again
+   after topology edits. Insert meshes are visual kitbash helpers — they are not
+   merged into Make bSkin / Preview / Apply output.
+10. **Preview / Refresh** — non-destructive on-demand preview. Creates a temporary mesh
+    in a `bSpheres_Preview` collection. Re-clicking updates it in-place so the Outliner
+    stays clean. Use **Delete** to remove it.
+11. **Make bSkin** — non-destructive permanent bake. Creates a new plain mesh object in a
     `bSpheres_Output` collection without touching the control structure. Each run produces
     a fresh output object named `bSkin…`.
-11. **Apply** — destructive bake. Applies all three modifiers directly onto the control
+12. **Apply** — destructive bake. Applies all three modifiers directly onto the control
     object, then post-processes using the same bSkin Settings (remesh, smooth, cleanup).
     Use this when you are done iterating.
 
