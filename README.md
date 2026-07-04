@@ -18,6 +18,31 @@ wraps all of that behind a single panel so you can just start sketching.
 
 ## Installation
 
+### Recommended: add the extension repository (automatic updates)
+
+bSpheres NX is published to its own Blender extensions repository, so Blender can
+update it in place — no uninstall/reinstall:
+
+1. In Blender, open **Edit → Preferences → Get Extensions**, expand the
+   **Repositories** dropdown (top right) and choose **+ → Add Remote Repository**.
+2. Enter the URL `https://cracksoldier.github.io/blender_bspheres/index.json` and
+   enable **Check for Updates on Startup**.
+3. Search for **bSpheres NX** in Get Extensions and click **Install**.
+
+New releases then show up as regular extension updates. If you previously installed
+from disk, uninstall that copy once before installing from the repository —
+afterwards updates are automatic. (Addon preferences reset on that one migration;
+per-object settings stored in your `.blend` files are unaffected.)
+
+### Manual: install from disk
+
+Download `bspheres-<version>.zip` from the
+[Releases page](https://github.com/Cracksoldier/blender_bspheres/releases), then in
+Blender: **Edit → Preferences → Get Extensions → Install from Disk…**, pick the zip,
+and enable **bSpheres NX**.
+
+### From source
+
 The addon is packaged as an Extension. From this folder you can build a
 distributable zip with Blender's command-line tools:
 
@@ -26,9 +51,8 @@ blender --command extension validate .
 blender --command extension build      # produces bspheres-<version>.zip
 ```
 
-Then in Blender: **Edit → Preferences → Get Extensions → Install from Disk…**, pick
-the generated zip, and enable **bSpheres NX**. (For quick local development you can also
-drop the folder into your Blender extensions directory and use *Reload Scripts*.)
+(For quick local development you can also drop the folder into your Blender
+extensions directory and use *Reload Scripts*.)
 
 ## Usage
 

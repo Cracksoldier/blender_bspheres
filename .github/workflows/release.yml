@@ -56,11 +56,48 @@ jobs:
           blender --command extension build \
             --source-dir . --output-filepath "bspheres-${{ inputs.version }}.zip"
 
+      # Regenerate the remote-repository index served via GitHub Pages so
+      # installed copies see this release as an in-place update. The hash must
+      # match the exact zip uploaded as the release asset below. Skipped for
+      # pre-releases so dev builds are not pushed to all users as updates.
+      - name: Generate extensions repository index
+        if: ${{ !inputs.prerelease }}
+        run: |
+          python3 - <<'EOF'
+          import hashlib, json, tomllib
+          from pathlib import Path
+
+          version = "${{ inputs.version }}"
+          repo = "${{ github.repository }}"
+          zip_path = Path(f"bspheres-{version}.zip")
+          manifest = tomllib.loads(Path("blender_manifest.toml").read_text(encoding="utf-8"))
+
+          entry = {
+              "schema_version": manifest["schema_version"],
+              "id": manifest["id"],
+              "name": manifest["name"],
+              "tagline": manifest["tagline"],
+              "version": manifest["version"],
+              "type": manifest["type"],
+              "maintainer": manifest["maintainer"],
+              "license": manifest["license"],
+              "blender_version_min": manifest["blender_version_min"],
+              "tags": manifest["tags"],
+              "website": f"https://{repo.split('/')[0].lower()}.github.io/{repo.split('/')[1]}/",
+              "archive_url": f"https://github.com/{repo}/releases/download/v{version}/{zip_path.name}",
+              "archive_size": zip_path.stat().st_size,
+              "archive_hash": "sha256:" + hashlib.sha256(zip_path.read_bytes()).hexdigest(),
+          }
+          index = {"version": "v1", "blocklist": [], "data": [entry]}
+          Path("docs/index.json").write_text(json.dumps(index, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+          EOF
+          cat docs/index.json
+
       - name: Commit bump, tag, push
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add blender_manifest.toml
+          git add blender_manifest.toml docs/index.json
           git diff --cached --quiet || git commit -m "Release v${{ inputs.version }}"
           git push origin "HEAD:${{ github.ref_name }}"
           if git ls-remote --tags origin "refs/tags/v${{ inputs.version }}" | grep -q .; then
