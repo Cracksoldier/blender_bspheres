@@ -448,6 +448,24 @@ def _get_branch_geom(bm, parent_map, active_vert, exclude_root=False):
     return branch_bverts, branch_bedges
 
 
+def _bake_bskin_object(context, source_obj):
+    """Bake the evaluated modifier stack of source_obj into a new mesh object linked
+    into bSpheres_Output. Must be called in OBJECT mode. Returns the new object."""
+    depsgraph = context.evaluated_depsgraph_get()
+    evaluated_obj = source_obj.evaluated_get(depsgraph)
+    mesh = bpy.data.meshes.new_from_object(evaluated_obj, depsgraph=depsgraph)
+
+    name = source_obj.name
+    output_name = ('bSkin' + name[7:]) if name.startswith('bSphere') else 'bSkin'
+
+    new_obj = bpy.data.objects.new(output_name, mesh)
+    new_obj.matrix_world = source_obj.matrix_world.copy()
+
+    col = _ensure_collection("bSpheres_Output", context.scene)
+    col.objects.link(new_obj)
+    return new_obj
+
+
 class MakeBSkin(bpy.types.Operator):
     """Create a new sculptable mesh from the bSphere control object without modifying it"""
     bl_idname = 'bspheres.make_bskin'
@@ -466,22 +484,62 @@ class MakeBSkin(bpy.types.Operator):
         if settings.warn_thin_branches:
             _warn_thin_branches(self, source_obj, settings)
 
-        depsgraph = context.evaluated_depsgraph_get()
-        evaluated_obj = source_obj.evaluated_get(depsgraph)
-        mesh = bpy.data.meshes.new_from_object(evaluated_obj, depsgraph=depsgraph)
+        new_obj = _bake_bskin_object(context, source_obj)
 
-        name = source_obj.name
-        output_name = ('bSkin' + name[7:]) if name.startswith('bSphere') else 'bSkin'
-
-        new_obj = bpy.data.objects.new(output_name, mesh)
-        new_obj.matrix_world = source_obj.matrix_world.copy()
-
-        col = _ensure_collection("bSpheres_Output", context.scene)
-        col.objects.link(new_obj)
-
-        _apply_bskin_settings(new_obj, source_obj.bspheres_skin_settings, context)
+        _apply_bskin_settings(new_obj, settings, context)
         bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
         return {"FINISHED"}
+
+
+class MakeRiggedBSkin(bpy.types.Operator):
+    """Bake the bSphere into a mesh, generate its armature, and bind them with automatic weights"""
+    bl_idname = 'bspheres.make_rigged_bskin'
+    bl_label = 'Make Rigged bSkin'
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object)
+
+    def execute(self, context):
+        source_obj = context.active_object
+        previous_mode = context.mode
+        settings = source_obj.bspheres_skin_settings
+        bpy.ops.object.mode_set(mode='OBJECT')
+        if settings.warn_thin_branches:
+            _warn_thin_branches(self, source_obj, settings)
+
+        new_obj = _bake_bskin_object(context, source_obj)
+        _apply_bskin_settings(new_obj, settings, context)
+
+        arm_obj = _generate_armature_object(self, context, source_obj, include_mirrored=True)
+        if arm_obj is None:
+            self.report({'ERROR'}, "Baked mesh was created but not rigged — see the warning above.")
+            bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
+            return {'CANCELLED'}
+
+        # Bind with automatic weights: parent_set needs the mesh selected and the
+        # armature active, so swap selection inside try/finally (same pattern as
+        # _run_mesh_cleanup).
+        prev_active = context.view_layer.objects.active
+        prev_selected = list(context.selected_objects)
+        try:
+            for o in prev_selected:
+                o.select_set(False)
+            new_obj.select_set(True)
+            arm_obj.select_set(True)
+            context.view_layer.objects.active = arm_obj
+            bpy.ops.object.parent_set(type='ARMATURE_AUTO')
+        finally:
+            new_obj.select_set(False)
+            arm_obj.select_set(False)
+            for o in prev_selected:
+                o.select_set(True)
+            context.view_layer.objects.active = prev_active
+
+        bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
+        self.report({'INFO'}, f"Rigged bSkin '{new_obj.name}' bound to armature '{arm_obj.name}'.")
+        return {'FINISHED'}
 
 
 _PRESET_ITEMS = [
@@ -1513,6 +1571,7 @@ class BSpheresPanel(bpy.types.Panel):
                 col.label(text="Convert to Sculptable Mesh")
                 sub = col.column(align=True)
                 sub.operator("bspheres.make_bskin", text="Make bSkin")
+                sub.operator("bspheres.make_rigged_bskin", text="Make Rigged bSkin")
                 sub.operator("tcg.apply_bsphere_modifiers", text="Apply")
                 layout.label(text="Extrude Vert: E")
                 layout.label(text="Scale Vert: Ctrl-A")
