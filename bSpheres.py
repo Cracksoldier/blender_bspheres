@@ -15,6 +15,7 @@ import bpy
 import bmesh
 from bpy_extras.object_utils import AddObjectHelper
 from collections import deque
+import itertools
 import math
 import mathutils
 
@@ -658,11 +659,137 @@ class BSphereClearPreserve(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _generate_armature_object(operator, context, obj, include_mirrored=True):
+    """Create an armature object from the bSphere control mesh in bSpheres_Armatures.
+    With include_mirrored, also creates bone sets for the halves produced by the
+    Mirror modifier (one set per non-empty subset of its enabled axes, mirrored in
+    the control object's local space — Blender's armature symmetrize only handles X,
+    while bSpheres defaults to Y mirroring). Must be called in OBJECT mode; restores
+    selection and the active object, and leaves the mode in OBJECT. Returns the
+    armature object, or None if no skin root is marked."""
+    root_idx = _find_skin_root(obj)
+    if root_idx < 0:
+        operator.report({'ERROR'}, "No skin root marked. Mark a vertex as root first.")
+        return None
+
+    adj = _build_mesh_graph(obj)
+    parent_map, found_cycle = _bfs_tree(adj, root_idx)
+
+    if found_cycle:
+        operator.report({'WARNING'}, "Cycle detected in mesh graph — cycle edges are skipped.")
+
+    n_verts = len(obj.data.vertices)
+    if len(parent_map) < n_verts:
+        operator.report(
+            {'WARNING'},
+            f"{n_verts - len(parent_map)} vertices not reachable from root — they will not become bones.",
+        )
+
+    # The Mirror modifier mirrors in object-local space, so keep local positions
+    # and only transform to world when assigning bone heads/tails.
+    local_positions = [v.co.copy() for v in obj.data.vertices]
+
+    mirror_combos = []
+    if include_mirrored:
+        mirror_mod = next((m for m in obj.modifiers if m.type == 'MIRROR'), None)
+        if mirror_mod is not None:
+            axes = [i for i in range(3) if mirror_mod.use_axis[i]]
+            for r in range(1, len(axes) + 1):
+                mirror_combos.extend(itertools.combinations(axes, r))
+
+    def mirrored(co, combo):
+        m = co.copy()
+        for axis in combo:
+            m[axis] = -m[axis]
+        return m
+
+    name = obj.name
+    arm_name = ('bArmature' + name[7:]) if name.startswith('bSphere') else 'bArmature'
+    arm_data = bpy.data.armatures.new(arm_name)
+    arm_obj = bpy.data.objects.new(arm_name, arm_data)
+    _ensure_collection("bSpheres_Armatures", context.scene).objects.link(arm_obj)
+
+    prev_active = context.view_layer.objects.active
+    other_selected = [o for o in context.selected_objects if o is not obj]
+    try:
+        for o in other_selected:
+            o.select_set(False)
+        obj.select_set(False)
+        context.view_layer.objects.active = arm_obj
+        arm_obj.select_set(True)
+        bpy.ops.object.mode_set(mode='EDIT')
+
+        bone_refs = {}
+        for child_idx, par_idx in parent_map.items():
+            if par_idx is None:
+                continue
+            head = obj.matrix_world @ local_positions[par_idx]
+            tail = obj.matrix_world @ local_positions[child_idx]
+            if (tail - head).length < 1e-6:
+                operator.report({'WARNING'}, f"Skipping zero-length edge {par_idx}→{child_idx}.")
+                continue
+            bone = arm_data.edit_bones.new(f"bone_{par_idx}_{child_idx}")
+            bone.head = head
+            bone.tail = tail
+            bone_refs[child_idx] = (bone, par_idx)
+
+        for child_idx, (bone, par_idx) in bone_refs.items():
+            if par_idx in bone_refs:
+                bone.parent = bone_refs[par_idx][0]
+            elif par_idx != root_idx:
+                operator.report(
+                    {'WARNING'},
+                    f"Bone for vertex {child_idx} is disconnected — "
+                    f"its parent edge to vertex {par_idx} was skipped.",
+                )
+
+        # Mirrored bone sets. Edges lying entirely on the mirror plane(s) are
+        # skipped — their copy would coincide with the original bone.
+        for combo in mirror_combos:
+            suffix = '.m' + ''.join('XYZ'[i] for i in combo)
+            combo_refs = {}
+            for child_idx, (bone, par_idx) in bone_refs.items():
+                head_l = mirrored(local_positions[par_idx], combo)
+                tail_l = mirrored(local_positions[child_idx], combo)
+                if ((head_l - local_positions[par_idx]).length < 1e-6
+                        and (tail_l - local_positions[child_idx]).length < 1e-6):
+                    continue
+                mbone = arm_data.edit_bones.new(bone.name + suffix)
+                mbone.head = obj.matrix_world @ head_l
+                mbone.tail = obj.matrix_world @ tail_l
+                combo_refs[child_idx] = (mbone, par_idx)
+            for child_idx, (mbone, par_idx) in combo_refs.items():
+                if par_idx in combo_refs:
+                    mbone.parent = combo_refs[par_idx][0]
+                elif par_idx in bone_refs:
+                    # The parent edge lies on the mirror plane — hang the
+                    # mirrored chain off the original (shared) bone.
+                    mbone.parent = bone_refs[par_idx][0]
+
+        bpy.ops.object.mode_set(mode='OBJECT')
+    finally:
+        if context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        arm_obj.select_set(False)
+        obj.select_set(True)
+        for o in other_selected:
+            o.select_set(True)
+        context.view_layer.objects.active = prev_active
+
+    return arm_obj
+
+
 class GenerateBSphereArmature(bpy.types.Operator):
     """Generate a Blender armature from the bSphere control mesh"""
     bl_idname = 'bspheres.generate_armature'
     bl_label = 'Generate Armature'
     bl_options = {'REGISTER', 'UNDO'}
+
+    include_mirrored: bpy.props.BoolProperty(
+        name="Include Mirrored Half",
+        default=True,
+        description="Also generate bones for the halves produced by the Mirror modifier",
+    )
 
     @classmethod
     def poll(cls, context):
@@ -673,78 +800,15 @@ class GenerateBSphereArmature(bpy.types.Operator):
         previous_mode = context.mode
 
         bpy.ops.object.mode_set(mode='OBJECT')
+        arm_obj = _generate_armature_object(self, context, obj, self.include_mirrored)
+        bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
 
-        root_idx = _find_skin_root(obj)
-        if root_idx < 0:
-            self.report({'ERROR'}, "No skin root marked. Mark a vertex as root first.")
-            bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
+        if arm_obj is None:
             return {'CANCELLED'}
-
-        adj = _build_mesh_graph(obj)
-        parent_map, found_cycle = _bfs_tree(adj, root_idx)
-
-        if found_cycle:
-            self.report({'WARNING'}, "Cycle detected in mesh graph — cycle edges are skipped.")
-
-        n_verts = len(obj.data.vertices)
-        if len(parent_map) < n_verts:
-            self.report(
-                {'WARNING'},
-                f"{n_verts - len(parent_map)} vertices not reachable from root — they will not become bones.",
-            )
-
-        world_positions = [obj.matrix_world @ v.co for v in obj.data.vertices]
-
-        name = obj.name
-        arm_name = ('bArmature' + name[7:]) if name.startswith('bSphere') else 'bArmature'
-        arm_data = bpy.data.armatures.new(arm_name)
-        arm_obj = bpy.data.objects.new(arm_name, arm_data)
-        _ensure_collection("bSpheres_Armatures", context.scene).objects.link(arm_obj)
-
-        prev_active = context.view_layer.objects.active
-        other_selected = [o for o in context.selected_objects if o is not obj]
-        try:
-            for o in other_selected:
-                o.select_set(False)
-            obj.select_set(False)
-            context.view_layer.objects.active = arm_obj
-            arm_obj.select_set(True)
-            bpy.ops.object.mode_set(mode='EDIT')
-
-            bone_refs = {}
-            for child_idx, par_idx in parent_map.items():
-                if par_idx is None:
-                    continue
-                head = world_positions[par_idx]
-                tail = world_positions[child_idx]
-                if (tail - head).length < 1e-6:
-                    self.report({'WARNING'}, f"Skipping zero-length edge {par_idx}→{child_idx}.")
-                    continue
-                bone = arm_data.edit_bones.new(f"bone_{par_idx}_{child_idx}")
-                bone.head = head
-                bone.tail = tail
-                bone_refs[child_idx] = (bone, par_idx)
-
-            for child_idx, (bone, par_idx) in bone_refs.items():
-                if par_idx in bone_refs:
-                    bone.parent = bone_refs[par_idx][0]
-                elif par_idx != root_idx:
-                    self.report(
-                        {'WARNING'},
-                        f"Bone for vertex {child_idx} is disconnected — "
-                        f"its parent edge to vertex {par_idx} was skipped.",
-                    )
-
-            bpy.ops.object.mode_set(mode='OBJECT')
-        finally:
-            arm_obj.select_set(False)
-            obj.select_set(True)
-            for o in other_selected:
-                o.select_set(True)
-            context.view_layer.objects.active = prev_active
-            bpy.ops.object.mode_set(mode=_MODE_SET_MAP.get(previous_mode, previous_mode))
-
-        self.report({'INFO'}, f"Armature '{arm_name}' generated. Note: only the unmirrored half is included.")
+        if self.include_mirrored:
+            self.report({'INFO'}, f"Armature '{arm_obj.name}' generated.")
+        else:
+            self.report({'INFO'}, f"Armature '{arm_obj.name}' generated. Note: only the unmirrored half is included.")
         return {'FINISHED'}
 
 
