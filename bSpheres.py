@@ -86,7 +86,7 @@ class applyBSphereModifiers(bpy.types.Operator):
         # Collect insert placements before the modifiers are applied — applying
         # them rebuilds the mesh and destroys the per-vertex/edge attributes.
         insert_placements = (
-            list(_iter_insert_placements(self, obj)) if settings.use_include_inserts else []
+            _collect_insert_placements(self, obj) if settings.use_include_inserts else []
         )
 
         # Apply by modifier type, not by the default names ("Mirror"/"Skin"/
@@ -1157,6 +1157,26 @@ class BSphereClearInsertMesh(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def _find_insert_instances(source_name):
+    """Return ({vert_idx: inst}, {edge_idx: inst}) for the live instances in
+    bSpheres_Inserts tagged with the given source object name."""
+    existing_node = {}
+    existing_edge = {}
+    col = bpy.data.collections.get("bSpheres_Inserts")
+    if col is None:
+        return existing_node, existing_edge
+    for inst in col.objects:
+        if not inst.get("bspheres_insert") or inst.get("bspheres_source") != source_name:
+            continue
+        vi = inst.get("bspheres_vert_idx")
+        ei = inst.get("bspheres_edge_idx")
+        if vi is not None:
+            existing_node[vi] = inst
+        elif ei is not None:
+            existing_edge[ei] = inst
+    return existing_node, existing_edge
+
+
 def _iter_insert_placements(operator, obj):
     """Yield (kind, index, source_obj, matrix_world) for every valid insert-mesh
     assignment on obj: kind 'VERT' places at the vertex (keeping the source
@@ -1201,6 +1221,22 @@ def _iter_insert_placements(operator, obj):
                       @ rot.to_matrix().to_4x4()
                       @ mathutils.Matrix.Diagonal((1.0, 1.0, edge_len, 1.0)))
             yield 'EDGE', i, source_mesh_obj, matrix
+
+
+def _collect_insert_placements(operator, source_obj):
+    """Placements for baking: computed transforms, overridden by the live
+    instance's matrix_world where a matching instance exists in bSpheres_Inserts —
+    so manual position/rotation/scale tweaks on instances carry into the bake.
+    A stale instance (assignment changed without a refresh) keeps the computed
+    transform. Must be called in OBJECT mode."""
+    existing_node, existing_edge = _find_insert_instances(source_obj.name)
+    placements = []
+    for kind, i, source_mesh_obj, matrix in _iter_insert_placements(operator, source_obj):
+        inst = (existing_node if kind == 'VERT' else existing_edge).get(i)
+        if inst is not None and inst.data == source_mesh_obj.data:
+            matrix = inst.matrix_world.copy()
+        placements.append((kind, i, source_mesh_obj, matrix))
+    return placements
 
 
 def _join_inserts(operator, context, target_obj, placements):
@@ -1248,7 +1284,7 @@ def _maybe_join_inserts(operator, context, target_obj, source_obj):
     _join_inserts directly."""
     if source_obj.bspheres_skin_settings.use_include_inserts:
         _join_inserts(operator, context, target_obj,
-                      list(_iter_insert_placements(operator, source_obj)))
+                      _collect_insert_placements(operator, source_obj))
 
 
 class BSphereRefreshInsertMeshes(bpy.types.Operator):
@@ -1268,18 +1304,7 @@ class BSphereRefreshInsertMeshes(bpy.types.Operator):
         bpy.ops.object.mode_set(mode='OBJECT')
         try:
             col = _ensure_collection("bSpheres_Inserts", context.scene)
-
-            existing_node = {}
-            existing_edge = {}
-            for inst in list(col.objects):
-                if not inst.get("bspheres_insert") or inst.get("bspheres_source") != obj.name:
-                    continue
-                vi = inst.get("bspheres_vert_idx")
-                ei = inst.get("bspheres_edge_idx")
-                if vi is not None:
-                    existing_node[vi] = inst
-                elif ei is not None:
-                    existing_edge[ei] = inst
+            existing_node, existing_edge = _find_insert_instances(obj.name)
 
             live_verts = set()
             live_edges = set()

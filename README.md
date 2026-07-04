@@ -83,7 +83,8 @@ to open it).
      normals already).
    - **Include Inserts** — join the assigned insert meshes (see **Refresh Insert
      Meshes**) into the baked output before remeshing, so voxel remesh unifies
-     everything into one watertight mesh (off by default).
+     everything into one watertight mesh (off by default). Manual transform tweaks
+     you've made to the instances in `bSpheres_Inserts` are respected by the bake.
    - **Warn Thin Branches / Min Radius** — emit a warning for any vertex whose skin
      radius falls below the minimum (default 0.01). Vertices in the
      `bspheres_preserve` group are exempt. The warning fires during **Make bSkin**
