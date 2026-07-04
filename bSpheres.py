@@ -734,6 +734,55 @@ class BSphereClearPreserve(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class BSphereSetSkinRadius(bpy.types.Operator):
+    """Set the skin radius of all selected vertices numerically"""
+    bl_idname = 'bspheres.set_skin_radius'
+    bl_label = 'Set Skin Radius'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    radius: FloatVectorProperty(
+        name="Radius",
+        size=2,
+        min=0.0001,
+        max=10.0,
+        default=(0.25, 0.25),
+        description="Skin radius (X × Y) to assign to the selected vertices",
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
+
+    def invoke(self, context, event):
+        # Prime the dialog with the active vertex's current radius.
+        bm = bmesh.from_edit_mesh(context.active_object.data)
+        skin_layers = bm.verts.layers.skin
+        active = bm.select_history.active
+        if skin_layers and isinstance(active, bmesh.types.BMVert):
+            r = active[skin_layers[0]].radius
+            self.radius = (r[0], r[1])
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        obj = context.active_object
+        bm = bmesh.from_edit_mesh(obj.data)
+        skin_layers = bm.verts.layers.skin
+        if not skin_layers:
+            self.report({'WARNING'}, "No skin layer found.")
+            return {'CANCELLED'}
+        layer = skin_layers[0]
+        count = 0
+        for v in bm.verts:
+            if v.select:
+                v[layer].radius = (self.radius[0], self.radius[1])
+                count += 1
+        if count == 0:
+            self.report({'WARNING'}, "No vertices selected.")
+            return {'CANCELLED'}
+        bmesh.update_edit_mesh(obj.data)
+        return {'FINISHED'}
+
+
 def _generate_armature_object(operator, context, obj, include_mirrored=True):
     """Create an armature object from the bSphere control mesh in bSpheres_Armatures.
     With include_mirrored, also creates bone sets for the halves produced by the
@@ -1594,6 +1643,7 @@ class BSpheresPanel(bpy.types.Panel):
                                 r = sv.radius
                                 box2.label(text=f"Skin: {r[0]:.3f} × {r[1]:.3f}")
                                 box2.label(text=f"Root: {sv.use_root}  Loose: {sv.use_loose}")
+                            box2.operator("bspheres.set_skin_radius", text="Set Radius")
                             row2 = box2.row(align=True)
                             row2.operator("bspheres.mark_preserve", text="Mark Preserve")
                             row2.operator("bspheres.clear_preserve", text="Clear Preserve")
