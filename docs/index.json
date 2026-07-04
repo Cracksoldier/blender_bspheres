@@ -7,7 +7,7 @@
       "id": "bspheres",
       "name": "bSpheres NX",
       "tagline": "zSpheres-style base mesh creation — upgraded",
-      "version": "1.4.0",
+      "version": "1.4.1",
       "type": "add-on",
       "maintainer": "Cracksoldier",
       "license": [
@@ -19,9 +19,9 @@
         "Modeling"
       ],
       "website": "https://cracksoldier.github.io/blender_bspheres/",
-      "archive_url": "https://github.com/Cracksoldier/blender_bspheres/releases/download/v1.4.0/bspheres-1.4.0.zip",
-      "archive_size": 37181,
-      "archive_hash": "sha256:0e0baca39b8805c12ad12fa84b0d16a0783d2ef79272e4e56f9c0c774f0c4be6"
+      "archive_url": "https://github.com/Cracksoldier/blender_bspheres/releases/download/v1.4.1/bspheres-1.4.1.zip",
+      "archive_size": 39362,
+      "archive_hash": "sha256:06e32efe37e806aaa6fb9ed98c0f51557017af8a41504d0cbfc54e62196544dc"
     }
   ]
 }
