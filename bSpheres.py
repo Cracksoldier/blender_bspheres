@@ -223,8 +223,10 @@ class AddBMesh(bpy.types.Operator):
         bpy.context.object.modifiers["Subdivision"].quality = 3
         
         bpy.ops.object.mode_set(mode='EDIT')
-        context.space_data.shading.show_xray = True
-        
+        space = context.space_data
+        if space and space.type == 'VIEW_3D':
+            space.shading.show_xray = True
+
         bpy.ops.object.skin_root_mark()
 
         return {'FINISHED'}
@@ -353,29 +355,40 @@ def _bfs_tree(adj, root_idx):
     return parent_map, found_cycle
 
 
-def _get_chain_graph(operator, context):
-    obj = context.active_object
-    bm = bmesh.from_edit_mesh(obj.data)
+def _bfs_from_root(bm):
+    """BFS the live BMesh from the skin root. Returns (parent_map, found_cycle, error);
+    on failure parent_map is None and error is a warning string. BMesh element indices
+    go stale (new elements report -1) after topology edits in the same edit session,
+    so vertex and edge indices are refreshed here before any index-keyed use."""
+    bm.verts.index_update()
+    bm.edges.index_update()
     bm.verts.ensure_lookup_table()
 
     skin_layers = bm.verts.layers.skin
     if not skin_layers:
-        operator.report({'WARNING'}, "No skin layer found.")
-        return None
-    skin_layer = skin_layers[0]
-
-    root_vert = next((v for v in bm.verts if v[skin_layer].use_root), None)
+        return None, False, "No skin layer found."
+    root_vert = next((v for v in bm.verts if v[skin_layers[0]].use_root), None)
     if root_vert is None:
-        operator.report({'WARNING'}, "No skin root marked. Mark a vertex as root first.")
+        return None, False, "No skin root marked. Mark a vertex as root first."
+
+    adj = {v.index: [e.other_vert(v).index for e in v.link_edges] for v in bm.verts}
+    parent_map, found_cycle = _bfs_tree(adj, root_vert.index)
+    return parent_map, found_cycle, None
+
+
+def _get_chain_graph(operator, context):
+    obj = context.active_object
+    bm = bmesh.from_edit_mesh(obj.data)
+
+    parent_map, found_cycle, error = _bfs_from_root(bm)
+    if error is not None:
+        operator.report({'WARNING'}, error)
         return None
 
     active = bm.select_history.active
     if not isinstance(active, bmesh.types.BMVert):
         operator.report({'WARNING'}, "No active vertex. Select a vertex first.")
         return None
-
-    adj = {v.index: [e.other_vert(v).index for e in v.link_edges] for v in bm.verts}
-    parent_map, found_cycle = _bfs_tree(adj, root_vert.index)
 
     if active.index not in parent_map:
         operator.report({'WARNING'}, "Active vertex is not reachable from root.")
@@ -386,23 +399,24 @@ def _get_chain_graph(operator, context):
     return bm, parent_map, active
 
 
-def _find_parent_edge_idx(bm, active_vert):
-    """Return the edge index connecting active_vert to its BFS parent, or -1 if none."""
-    skin_layers = bm.verts.layers.skin
-    if not skin_layers:
-        return -1
-    root_vert = next((v for v in bm.verts if v[skin_layers[0]].use_root), None)
-    if root_vert is None:
-        return -1
-    adj = {v.index: [e.other_vert(v).index for e in v.link_edges] for v in bm.verts}
-    parent_map, _ = _bfs_tree(adj, root_vert.index)
+def _find_parent_edge(bm, parent_map, active_vert):
+    """Return the BMEdge connecting active_vert to its BFS parent, or None if the
+    active vertex is the root or no such edge exists."""
     parent_idx = parent_map.get(active_vert.index)
     if parent_idx is None:
-        return -1
+        return None
     bm.verts.ensure_lookup_table()
-    bm.edges.ensure_lookup_table()
     parent_bvert = bm.verts[parent_idx]
-    edge = next((e for e in active_vert.link_edges if e.other_vert(active_vert) == parent_bvert), None)
+    return next((e for e in active_vert.link_edges if e.other_vert(active_vert) == parent_bvert), None)
+
+
+def _find_parent_edge_idx(bm, active_vert):
+    """Return the edge index connecting active_vert to its BFS parent, or -1 if none.
+    Refreshes vertex/edge indices as a side effect (via _bfs_from_root)."""
+    parent_map, _, error = _bfs_from_root(bm)
+    if error is not None:
+        return -1
+    edge = _find_parent_edge(bm, parent_map, active_vert)
     return edge.index if edge is not None else -1
 
 
@@ -812,6 +826,26 @@ class BSphereSelectParentChain(bpy.types.Operator):
 
 # ── Feature 08: Insert Node & Link Meshes ────────────────────────────────────
 
+def _validate_insert_mesh(operator, control_obj, mesh_name, field_label):
+    """Validate an insert-mesh assignment target. Reports a warning and returns
+    False if the name is empty, the object is missing, it is not a mesh, or it
+    is the control object itself."""
+    if not mesh_name:
+        operator.report({'WARNING'}, f"No mesh object selected in {field_label} field.")
+        return False
+    target = bpy.data.objects.get(mesh_name)
+    if target is None:
+        operator.report({'WARNING'}, f"Object '{mesh_name}' not found.")
+        return False
+    if target.type != 'MESH':
+        operator.report({'WARNING'}, f"Object '{mesh_name}' is not a mesh.")
+        return False
+    if target == control_obj:
+        operator.report({'WARNING'}, "Cannot use the bSphere control object as its own insert mesh.")
+        return False
+    return True
+
+
 class BSphereAssignNodeMesh(bpy.types.Operator):
     """Assign the selected mesh object as the insert mesh for the active vertex"""
     bl_idname = 'bspheres.assign_node_mesh'
@@ -826,11 +860,7 @@ class BSphereAssignNodeMesh(bpy.types.Operator):
         obj = context.active_object
         settings = obj.bspheres_skin_settings
         mesh_name = settings.insert_node_mesh_name
-        if not mesh_name:
-            self.report({'WARNING'}, "No mesh object selected in Node Mesh field.")
-            return {'CANCELLED'}
-        if bpy.data.objects.get(mesh_name) is None:
-            self.report({'WARNING'}, f"Object '{mesh_name}' not found.")
+        if not _validate_insert_mesh(self, obj, mesh_name, "Node Mesh"):
             return {'CANCELLED'}
 
         bm = bmesh.from_edit_mesh(obj.data)
@@ -839,6 +869,9 @@ class BSphereAssignNodeMesh(bpy.types.Operator):
             self.report({'WARNING'}, "No active vertex. Select a vertex first.")
             return {'CANCELLED'}
 
+        # Refresh indices before using active.index as a mesh attribute index —
+        # a stale/-1 index would silently write to the wrong vertex.
+        bm.verts.index_update()
         vert_idx = active.index
         bpy.ops.object.mode_set(mode='OBJECT')
         try:
@@ -865,11 +898,7 @@ class BSphereAssignLinkMesh(bpy.types.Operator):
         obj = context.active_object
         settings = obj.bspheres_skin_settings
         mesh_name = settings.insert_link_mesh_name
-        if not mesh_name:
-            self.report({'WARNING'}, "No mesh object selected in Link Mesh field.")
-            return {'CANCELLED'}
-        if bpy.data.objects.get(mesh_name) is None:
-            self.report({'WARNING'}, f"Object '{mesh_name}' not found.")
+        if not _validate_insert_mesh(self, obj, mesh_name, "Link Mesh"):
             return {'CANCELLED'}
 
         result = _get_chain_graph(self, context)
@@ -877,15 +906,11 @@ class BSphereAssignLinkMesh(bpy.types.Operator):
             return {'CANCELLED'}
         bm, parent_map, active_vert = result
 
-        parent_idx = parent_map.get(active_vert.index)
-        if parent_idx is None:
+        if parent_map.get(active_vert.index) is None:
             self.report({'WARNING'}, "Active vertex is the root — no incoming edge to assign a link mesh to.")
             return {'CANCELLED'}
 
-        bm.verts.ensure_lookup_table()
-        bm.edges.ensure_lookup_table()
-        parent_bvert = bm.verts[parent_idx]
-        edge = next((e for e in active_vert.link_edges if e.other_vert(active_vert) == parent_bvert), None)
+        edge = _find_parent_edge(bm, parent_map, active_vert)
         if edge is None:
             self.report({'ERROR'}, "Could not find the edge between active vertex and parent.")
             return {'CANCELLED'}
@@ -920,10 +945,12 @@ class BSphereClearInsertMesh(bpy.types.Operator):
             self.report({'WARNING'}, "No active vertex.")
             return {'CANCELLED'}
 
-        vert_idx = active.index
+        # _find_parent_edge_idx refreshes stale indices, so call it before
+        # reading active.index.
         edge_idx = _find_parent_edge_idx(bm, active)
         if edge_idx == -1:
             edge_idx = None
+        vert_idx = active.index
 
         bpy.ops.object.mode_set(mode='OBJECT')
         try:
@@ -941,7 +968,8 @@ class BSphereClearInsertMesh(bpy.types.Operator):
 
 
 class BSphereRefreshInsertMeshes(bpy.types.Operator):
-    """Create or update insert mesh instances in the bSpheres_Inserts collection"""
+    """Create or update insert mesh instances in the bSpheres_Inserts collection.
+    Instances are matched by vertex/edge index, so refresh after topology edits"""
     bl_idname = 'bspheres.refresh_insert_meshes'
     bl_label = 'Refresh Insert Meshes'
     bl_options = {'REGISTER', 'UNDO'}
@@ -977,13 +1005,17 @@ class BSphereRefreshInsertMeshes(bpy.types.Operator):
                     if not mesh_name:
                         continue
                     source_mesh_obj = bpy.data.objects.get(mesh_name)
-                    if source_mesh_obj is None:
-                        self.report({'WARNING'}, f"Insert mesh '{mesh_name}' not found for vertex {i}.")
+                    if source_mesh_obj is None or source_mesh_obj.type != 'MESH':
+                        self.report({'WARNING'}, f"Insert mesh '{mesh_name}' for vertex {i} is missing or not a mesh.")
                         continue
                     world_pos = obj.matrix_world @ vert.co
                     live_verts.add(i)
                     if i in existing_node:
-                        existing_node[i].location = world_pos
+                        inst = existing_node[i]
+                        # Re-point the instance in case the assignment changed
+                        # since it was created.
+                        inst.data = source_mesh_obj.data
+                        inst.location = world_pos
                     else:
                         inst = source_mesh_obj.copy()
                         inst["bspheres_insert"] = True
@@ -1000,11 +1032,14 @@ class BSphereRefreshInsertMeshes(bpy.types.Operator):
                     if not mesh_name:
                         continue
                     source_mesh_obj = bpy.data.objects.get(mesh_name)
-                    if source_mesh_obj is None:
-                        self.report({'WARNING'}, f"Insert mesh '{mesh_name}' not found for edge {i}.")
+                    if source_mesh_obj is None or source_mesh_obj.type != 'MESH':
+                        self.report({'WARNING'}, f"Insert mesh '{mesh_name}' for edge {i} is missing or not a mesh.")
                         continue
                     v0 = obj.data.vertices[edge.vertices[0]].co
                     v1 = obj.data.vertices[edge.vertices[1]].co
+                    if (v1 - v0).length < 1e-6:
+                        self.report({'WARNING'}, f"Skipping zero-length edge {i}.")
+                        continue
                     midpoint = obj.matrix_world @ ((v0 + v1) / 2)
                     edge_vec = (obj.matrix_world.to_3x3() @ (v1 - v0)).normalized()
                     edge_len = (obj.matrix_world @ v1 - obj.matrix_world @ v0).length
@@ -1013,6 +1048,7 @@ class BSphereRefreshInsertMeshes(bpy.types.Operator):
                     live_edges.add(i)
                     if i in existing_edge:
                         inst = existing_edge[i]
+                        inst.data = source_mesh_obj.data
                         inst.location = midpoint
                         inst.rotation_mode = 'QUATERNION'
                         inst.rotation_quaternion = rot
@@ -1102,6 +1138,9 @@ class BSpheresMirrorBranch(bpy.types.Operator):
         if not branch_bverts:
             self.report({'WARNING'}, "Active vertex has no children to mirror.")
             return {'CANCELLED'}
+        # Resolve the direct children before duplicating — the lookup table is
+        # invalidated once new geometry is added.
+        child_verts = [bm.verts[c] for c, p in parent_map.items() if p == active_vert.index]
         dup = bmesh.ops.duplicate(bm, geom=branch_bverts + branch_bedges)
 
         for elem in dup['geom']:
@@ -1113,11 +1152,20 @@ class BSpheresMirrorBranch(bpy.types.Operator):
                 else:
                     elem.co.z = -elem.co.z
 
+        # Re-attach the mirrored branch at the active vertex so it stays
+        # reachable from the root (skin connectivity, chain selection, and
+        # armature generation all depend on it).
+        attach_edges = []
+        for cv in child_verts:
+            new_v = dup['vert_map'].get(cv)
+            if new_v is not None:
+                attach_edges.append(bm.edges.new((active_vert, new_v)))
+
         for v in bm.verts:
             v.select = False
         for e in bm.edges:
             e.select = False
-        for elem in dup['geom']:
+        for elem in dup['geom'] + attach_edges:
             if isinstance(elem, (bmesh.types.BMVert, bmesh.types.BMEdge)):
                 elem.select = True
 
@@ -1164,6 +1212,9 @@ class BSpheresRadialDuplicate(bpy.types.Operator):
             (0.0, 1.0, 0.0) if self.axis == 'Y' else
             (0.0, 0.0, 1.0)
         )
+        # Resolve the direct children before duplicating — the lookup table is
+        # invalidated once new geometry is added.
+        child_verts = [bm.verts[c] for c, p in parent_map.items() if p == active_vert.index]
 
         all_new = []
         for i in range(1, self.count):
@@ -1173,6 +1224,12 @@ class BSpheresRadialDuplicate(bpy.types.Operator):
             for elem in dup['geom']:
                 if isinstance(elem, bmesh.types.BMVert):
                     elem.co = rot @ (elem.co - pivot) + pivot
+            # Re-attach each copy at the active vertex so it stays reachable
+            # from the root (skin connectivity, chain selection, armature).
+            for cv in child_verts:
+                new_v = dup['vert_map'].get(cv)
+                if new_v is not None:
+                    all_new.append(bm.edges.new((active_vert, new_v)))
             all_new.extend(dup['geom'])
 
         for v in bm.verts:
@@ -1342,6 +1399,8 @@ class BSpheresPanel(bpy.types.Panel):
 
                     layout.label(text="Armature:")
                     layout.operator("bspheres.generate_armature", text="Generate Armature")
+
+                    layout.label(text="Insert Meshes:")
                     layout.operator("bspheres.refresh_insert_meshes", text="Refresh Insert Meshes")
 
                     if context.mode == 'EDIT_MESH':
@@ -1359,7 +1418,7 @@ class BSpheresPanel(bpy.types.Panel):
                             row2 = box2.row(align=True)
                             row2.operator("bspheres.mark_preserve", text="Mark Preserve")
                             row2.operator("bspheres.clear_preserve", text="Clear Preserve")
-                            layout.label(text="Insert Meshes:")
+                            layout.label(text="Assign Insert Meshes:")
                             box3 = layout.column(align=True)
                             row3a = box3.row(align=True)
                             row3a.prop_search(settings, "insert_node_mesh_name", bpy.data, "objects", text="Node")
