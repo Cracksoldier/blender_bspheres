@@ -1214,9 +1214,11 @@ def _get_stored_computed_matrix(inst):
 def _matrices_close(a, b):
     """Element-wise comparison with combined absolute+relative tolerance —
     matrix_world channels are float32-backed, so exact or 1e-6 comparison would
-    misclassify decompose/recompose round-trips as tweaks."""
+    misclassify decompose/recompose round-trips as tweaks. 1e-5 keeps ~10x
+    headroom over float32 round-trip noise while still detecting cm-scale
+    tweaks at km-scale coordinates (1e-4 masked them)."""
     return all(
-        abs(a[i][j] - b[i][j]) <= 1e-4 + 1e-4 * abs(b[i][j])
+        abs(a[i][j] - b[i][j]) <= 1e-5 + 1e-5 * abs(b[i][j])
         for i in range(4) for j in range(4)
     )
 
