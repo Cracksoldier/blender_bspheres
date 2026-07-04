@@ -25,5 +25,6 @@ paths_exclude_pattern = [
   "/.claude/",
   "/docs/",
   "/CLAUDE.md",
+  "/FEATURE_IDEAS.md",
   "*.zip",
 ]
