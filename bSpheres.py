@@ -1225,19 +1225,24 @@ def _matrices_close(a, b):
 
 def _resolve_instance_matrix(inst, computed):
     """Final world matrix for an instance given its freshly computed placement.
-    Returns None when the instance has no stored baseline (created before the
-    baseline mechanism existed) — the caller keeps the legacy behavior.
-    Untweaked (the instance still matches its baseline) resolves to the computed
-    placement, so the instance follows the geometry. Tweaked resolves to the
-    computed placement with the user's delta re-applied in the placement's local
-    frame, so the tweak rides the joint: a rotation stays about the instance's
-    own pivot and an offset follows the edge's direction."""
+    Returns None when the instance has no usable baseline — either none stored
+    (created before the baseline mechanism existed) or a singular one that no
+    delta can be extracted from (e.g. a zero-scale source object) — and the
+    caller keeps the legacy behavior. Untweaked (the instance still matches its
+    baseline) resolves to the computed placement, so the instance follows the
+    geometry. Tweaked resolves to the computed placement with the user's delta
+    re-applied in the placement's local frame, so the tweak rides the joint: a
+    rotation stays about the instance's own pivot and an offset follows the
+    edge's direction."""
     stored = _get_stored_computed_matrix(inst)
-    if stored is None:
+    if stored is None or abs(stored.determinant()) < 1e-12:
         return None
     if _matrices_close(inst.matrix_world, stored):
         return computed.copy()
-    delta = stored.inverted(mathutils.Matrix.Identity(4)) @ inst.matrix_world
+    try:
+        delta = stored.inverted() @ inst.matrix_world
+    except ValueError:
+        return None
     return computed @ delta
 
 
@@ -1420,19 +1425,19 @@ class BSphereRefreshInsertMeshes(bpy.types.Operator):
                     col.objects.link(inst)
 
                 if created:
-                    final = matrix
+                    _apply_instance_matrix(inst, kind, matrix)
                 else:
-                    final = _resolve_instance_matrix(inst, matrix)
-                    if final is None:
-                        # Legacy instance without a baseline: apply the
-                        # pre-baseline behavior once; the baseline stored below
-                        # upgrades it for the next refresh.
-                        if kind == 'VERT':
-                            inst.location = matrix.translation
-                        else:
-                            final = matrix
-                if final is not None:
-                    _apply_instance_matrix(inst, kind, final)
+                    resolved = _resolve_instance_matrix(inst, matrix)
+                    if resolved is not None:
+                        _apply_instance_matrix(inst, kind, resolved)
+                    elif kind == 'VERT':
+                        # No usable baseline: apply the pre-baseline behavior
+                        # once (location-only, preserving manual rotation and
+                        # scale); the baseline stored below upgrades the
+                        # instance for the next refresh.
+                        inst.location = matrix.translation
+                    else:
+                        _apply_instance_matrix(inst, kind, matrix)
                 _store_computed_matrix(inst, matrix)
 
             for vi, inst in existing_node.items():

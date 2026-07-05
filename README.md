@@ -133,9 +133,11 @@ to open it).
    link meshes at the edge midpoint, aligned along the edge (local +Z) and stretched
    to its length. Instances are matched by vertex/edge index, so click Refresh again
    after topology edits. Manual tweaks you make to an instance (move/rotate/scale)
-   are stored relative to its joint and survive refreshes. By default insert meshes
-   are visual kitbash helpers; enable **Include Inserts** in bSkin Settings to merge
-   them into baked output.
+   are stored relative to its joint and survive refreshes. (Instances created with
+   versions before 1.4.1 gain tweak tracking on their first Refresh; on that first
+   Refresh, link instances are reset to their computed placement, as older versions
+   always did.) By default insert meshes are visual kitbash helpers; enable
+   **Include Inserts** in bSkin Settings to merge them into baked output.
 10. **Preview / Refresh** — non-destructive on-demand preview. Creates a temporary mesh
     in a `bSpheres_Preview` collection. Re-clicking updates it in-place so the Outliner
     stays clean. Use **Delete** to remove it.
