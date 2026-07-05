@@ -1980,21 +1980,25 @@ class BSpheresPanel(bpy.types.Panel):
                             row3 = layout.row(align=True)
                             row3.operator("bspheres.select_child_chain", text="Select Children")
                             row3.operator("bspheres.select_parent_chain", text="Select Parents")
-                            layout.label(text="Branch Tools:")
-                            box4 = layout.column(align=True)
-                            box4.operator("bspheres.duplicate_branch", text="Duplicate Branch")
-                            row4 = box4.row(align=True)
-                            row4.label(text="Mirror:")
-                            op4 = row4.operator("bspheres.mirror_branch", text="X")
-                            op4.axis = 'X'
-                            op4 = row4.operator("bspheres.mirror_branch", text="Y")
-                            op4.axis = 'Y'
-                            op4 = row4.operator("bspheres.mirror_branch", text="Z")
-                            op4.axis = 'Z'
-                            box4.operator("bspheres.radial_duplicate", text="Radial Duplicate")
-                            box4.operator("bspheres.rotate_branch", text="Rotate Branch")
-                            box4.operator("bspheres.taper_branch", text="Taper Branch")
-                            box4.operator("bspheres.relax_radii", text="Relax Radii")
+
+                        # Not gated on an active vertex: Relax Radii only needs a
+                        # selection (box-select leaves select_history empty), and
+                        # the active-vertex tools report a warning when none is set.
+                        layout.label(text="Branch Tools:")
+                        box4 = layout.column(align=True)
+                        box4.operator("bspheres.duplicate_branch", text="Duplicate Branch")
+                        row4 = box4.row(align=True)
+                        row4.label(text="Mirror:")
+                        op4 = row4.operator("bspheres.mirror_branch", text="X")
+                        op4.axis = 'X'
+                        op4 = row4.operator("bspheres.mirror_branch", text="Y")
+                        op4.axis = 'Y'
+                        op4 = row4.operator("bspheres.mirror_branch", text="Z")
+                        op4.axis = 'Z'
+                        box4.operator("bspheres.radial_duplicate", text="Radial Duplicate")
+                        box4.operator("bspheres.rotate_branch", text="Rotate Branch")
+                        box4.operator("bspheres.taper_branch", text="Taper Branch")
+                        box4.operator("bspheres.relax_radii", text="Relax Radii")
 
                 split = layout.split()
                 col = split.column()

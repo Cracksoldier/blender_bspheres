@@ -40,6 +40,22 @@ Former ideas 1–5, now implemented:
     exactly this) plus a dynamic `EnumProperty` items callback would let users keep
     their own recipes.
 
+## Cleanup backlog (from code review, July 2026)
+
+- **Axis duplication** — the X/Y/Z `EnumProperty` items are defined identically in
+  `BSpheresMirrorBranch`, `BSpheresRadialDuplicate`, and `BSphereRotateBranch`, and
+  the axis→vector ternary in the latter two; extract module-level `_AXIS_ITEMS` and
+  `_axis_vector(axis)`.
+- **Relax snapshot scope** — `BSphereRelaxRadii` snapshots every vertex's radius per
+  iteration when only targets ∪ their neighbors are read; negligible at typical
+  control-mesh sizes, scope it if meshes ever get large.
+- **Hidden-vertex guard** — Relax targets check `v.select` but not `v.hide`;
+  unreachable via the UI (hiding deselects) but `and not v.hide` would match
+  native-tool semantics for scripted callers.
+- **Rotate pivot choice** — pivot is hardcoded to the parent joint per the original
+  idea; a pivot enum (parent / active / 3D cursor) could come later if posing
+  workflows want it.
+
 ## Bigger swings
 
 11. **Armature → bSphere import.** The inverse of Generate Armature: build a control
