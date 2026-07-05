@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "bspheres"
-version = "1.4.1"
+version = "1.5.0"
 name = "bSpheres NX"
 tagline = "zSpheres-style base mesh creation — upgraded"
 maintainer = "Cracksoldier"
