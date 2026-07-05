@@ -17,17 +17,10 @@ Former ideas 1–5, now implemented:
    selected vertices.
 5. **Taper Branch** — interpolates skin radii from the active vertex to an end
    radius at the branch tips, by distance along the branch.
-
-## Branch/radius tools (medium effort, builds on `_get_chain_graph`)
-
-6. **Rotate Branch.** Select-children + rotate is possible manually, but a dedicated
-   operator with the pivot locked to the active vertex's *parent* joint would behave
-   like posing a zSphere limb. The math is the same as `BSpheresRadialDuplicate`'s
-   pivot rotation, applied to the existing branch instead of copies.
-
-7. **Relax/Smooth Radii.** Average each vertex's skin radius with its graph neighbors
-   (adjacency from `_bfs_from_root`) over N iterations. Cheap to implement, smooths
-   out lumpy sketches before baking.
+6. **Rotate Branch** — poses the active vertex and its downstream chain around
+   the parent joint, with angle/axis in the redo panel.
+7. **Relax Radii** — neighbor-averages selected skin radii over N iterations;
+   Preserve-marked vertices are untouched.
 
 ## Feedback and workflow (medium effort)
 

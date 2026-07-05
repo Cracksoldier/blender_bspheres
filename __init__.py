@@ -42,12 +42,16 @@ def register():
     bpy.utils.register_class(BSpheresMirrorBranch)
     bpy.utils.register_class(BSpheresRadialDuplicate)
     bpy.utils.register_class(BSphereTaperBranch)
+    bpy.utils.register_class(BSphereRotateBranch)
+    bpy.utils.register_class(BSphereRelaxRadii)
     bpy.utils.register_class(BSpheresApplyPreset)
     bpy.utils.register_class(BSpheresPanel)
 
 def unregister():
     bpy.utils.unregister_class(BSpheresPanel)
     bpy.utils.unregister_class(BSpheresApplyPreset)
+    bpy.utils.unregister_class(BSphereRelaxRadii)
+    bpy.utils.unregister_class(BSphereRotateBranch)
     bpy.utils.unregister_class(BSphereTaperBranch)
     bpy.utils.unregister_class(BSpheresRadialDuplicate)
     bpy.utils.unregister_class(BSpheresMirrorBranch)

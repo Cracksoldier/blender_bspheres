@@ -119,9 +119,15 @@ to open it).
      - **Radial Duplicate** — creates rotated copies of the downstream branch around
        the chosen axis through the active vertex, each connected back to the active
        vertex. Count (default 4) and axis are adjustable in the operator redo panel.
+     - **Rotate Branch** — rotates the active vertex and everything downstream
+       around its **parent** joint, like posing a zSphere limb. Angle and axis are
+       adjustable live in the operator redo panel.
      - **Taper Branch** — interpolates skin radii from the active vertex down to an
        end radius at the branch tips (by distance along the branch). The end radius
        is adjustable in the operator redo panel. Great for tails, tentacles, horns.
+     - **Relax Radii** — smooths the skin radii of the selected vertices by
+       averaging with their neighbors (iterations and strength in the redo panel).
+       Vertices marked **Preserve** keep their radius.
 8. **Generate Armature** — creates a Blender armature from the bSphere control mesh.
    Each edge becomes one bone; bones are parented to mirror the vertex graph. The skin
    root vertex (set with **Mark Root**) determines the root bone. The armature is placed

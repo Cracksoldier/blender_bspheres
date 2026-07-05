@@ -1676,6 +1676,121 @@ class BSphereTaperBranch(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class BSphereRotateBranch(bpy.types.Operator):
+    """Rotate the active vertex and everything downstream around its parent joint"""
+    bl_idname = 'bspheres.rotate_branch'
+    bl_label = 'Rotate Branch'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    angle: FloatProperty(
+        name="Angle", subtype='ANGLE', default=math.radians(15.0),
+        description="Rotation around the parent joint",
+    )
+    axis: EnumProperty(
+        name="Axis",
+        items=[('X', "X", "Rotate around the X axis"),
+               ('Y', "Y", "Rotate around the Y axis"),
+               ('Z', "Z", "Rotate around the Z axis")],
+        default='Z',
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
+
+    def execute(self, context):
+        result = _get_chain_graph(self, context)
+        if result is None:
+            return {'CANCELLED'}
+        bm, parent_map, active_vert = result
+        obj = context.active_object
+
+        parent_idx = parent_map.get(active_vert.index)
+        if parent_idx is None:
+            self.report({'INFO'}, "Active vertex is the root — no parent joint to rotate around.")
+            return {'CANCELLED'}
+
+        branch_bverts, _ = _get_branch_geom(bm, parent_map, active_vert)
+
+        pivot = bm.verts[parent_idx].co.copy()
+        axis_vec = mathutils.Vector(
+            (1.0, 0.0, 0.0) if self.axis == 'X' else
+            (0.0, 1.0, 0.0) if self.axis == 'Y' else
+            (0.0, 0.0, 1.0)
+        )
+        rot = mathutils.Matrix.Rotation(self.angle, 4, axis_vec)
+        for v in branch_bverts:
+            v.co = rot @ (v.co - pivot) + pivot
+
+        bmesh.update_edit_mesh(obj.data)
+        return {'FINISHED'}
+
+
+class BSphereRelaxRadii(bpy.types.Operator):
+    """Smooth the skin radii of selected vertices by averaging with their neighbors"""
+    bl_idname = 'bspheres.relax_radii'
+    bl_label = 'Relax Radii'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    iterations: bpy.props.IntProperty(
+        name="Iterations", min=1, max=50, default=3,
+        description="Number of smoothing passes",
+    )
+    factor: FloatProperty(
+        name="Factor", min=0.0, max=1.0, default=0.5,
+        description="Blend toward the neighbor average per pass",
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return _is_bsphere_control(context.active_object) and context.mode == 'EDIT_MESH'
+
+    def execute(self, context):
+        obj = context.active_object
+        bm = bmesh.from_edit_mesh(obj.data)
+        skin_layers = bm.verts.layers.skin
+        if not skin_layers:
+            self.report({'WARNING'}, "No skin layer found.")
+            return {'CANCELLED'}
+        layer = skin_layers[0]
+        bm.verts.index_update()
+        bm.verts.ensure_lookup_table()
+
+        # Vertices in the preserve group keep their radius (consistent with the
+        # thin-branch warning) but still contribute as neighbors.
+        preserved = set()
+        preserve_idx = obj.vertex_groups.find("bspheres_preserve")
+        deform_layers = bm.verts.layers.deform
+        if preserve_idx >= 0 and deform_layers:
+            dlayer = deform_layers[0]
+            preserved = {v.index for v in bm.verts if preserve_idx in v[dlayer]}
+
+        targets = [
+            v for v in bm.verts
+            if v.select and v.index not in preserved and v.link_edges
+        ]
+        if not targets:
+            self.report({'INFO'}, "No selected vertices to relax.")
+            return {'FINISHED'}
+
+        for _ in range(self.iterations):
+            snapshot = {v.index: tuple(v[layer].radius) for v in bm.verts}
+            for v in targets:
+                neighbors = [snapshot[e.other_vert(v).index] for e in v.link_edges]
+                avg = (
+                    sum(n[0] for n in neighbors) / len(neighbors),
+                    sum(n[1] for n in neighbors) / len(neighbors),
+                )
+                cur = snapshot[v.index]
+                v[layer].radius = (
+                    cur[0] + (avg[0] - cur[0]) * self.factor,
+                    cur[1] + (avg[1] - cur[1]) * self.factor,
+                )
+
+        bmesh.update_edit_mesh(obj.data)
+        return {'FINISHED'}
+
+
 # ── Feature 10: Output Presets ───────────────────────────────────────────────
 
 class BSpheresApplyPreset(bpy.types.Operator):
@@ -1877,7 +1992,9 @@ class BSpheresPanel(bpy.types.Panel):
                             op4 = row4.operator("bspheres.mirror_branch", text="Z")
                             op4.axis = 'Z'
                             box4.operator("bspheres.radial_duplicate", text="Radial Duplicate")
+                            box4.operator("bspheres.rotate_branch", text="Rotate Branch")
                             box4.operator("bspheres.taper_branch", text="Taper Branch")
+                            box4.operator("bspheres.relax_radii", text="Relax Radii")
 
                 split = layout.split()
                 col = split.column()
